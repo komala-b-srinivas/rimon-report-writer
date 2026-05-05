@@ -1,6 +1,6 @@
 """
-Rimon Health — Psychological ASD Evaluation Report Writer
-Phase 1 — Built from actual Rimon Health report template
+Rimon Health - Psychological ASD Evaluation Report Writer
+Phase 1 - Built from actual Rimon Health report template
 """
 import streamlit as st
 from groq import Groq
@@ -21,7 +21,7 @@ from datetime import datetime
 load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-st.set_page_config(page_title="Rimon Health — ASD Report Writer", layout="wide")
+st.set_page_config(page_title="Rimon Health - ASD Report Writer", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════════
 # PASSWORD GATE
@@ -145,11 +145,11 @@ def comparison_score_label(cs):
     return f"Level {cs} = High Symptoms"
 
 # ══════════════════════════════════════════════════════════════════════
-# NARRATIVE GENERATORS  (rule-based — no LLM needed for these sections)
+# NARRATIVE GENERATORS  (rule-based - no LLM needed for these sections)
 # ══════════════════════════════════════════════════════════════════════
 
 BASC3_INTERP = {
-    # Clinical scales — high T = problem
+    # Clinical scales - high T = problem
     "Hyperactivity":           ("engages in many disruptive, impulsive, and uncontrolled behaviors.",
                                 "tends not to be excessively active, impulsive, or disruptive."),
     "Aggression":              ("acts aggressively and can be difficult to control.",
@@ -168,7 +168,7 @@ BASC3_INTERP = {
                                 "does not appear to withdraw from social contact more than others of the same age."),
     "Attention Problems":      ("has significant difficulty maintaining necessary levels of attention. The problems experienced are probably interfering with academic performance and functioning in other areas.",
                                 "does not appear to have significantly more difficulty with attention than others of the same age."),
-    # Adaptive scales — low T = problem
+    # Adaptive scales - low T = problem
     "Adaptability":            ("has difficulty adapting to a variety of situations.",
                                 "is able to adapt as well as most others of the same age to a variety of situations."),
     "Social Skills":           ("has difficulty complimenting others and making suggestions for improvement in a tactful and socially acceptable manner.",
@@ -310,8 +310,8 @@ Specifiers:
 Intellectual Impairment: {"Yes. There is Intellectual Impairment." if intellectual_impairment else "No. There is no intellectual impairment."}
 Language Impairment: {language_impairment or "Not specified."}
 
-Criteria A – Social Communication Severity: Level {criteria_a_level} – {"Requiring Very Substantial Support" if criteria_a_level == 3 else "Requiring Substantial Support" if criteria_a_level == 2 else "Requiring Support"}
-Criteria B – Restricted / Repetitive Behaviors Severity: Level {criteria_b_level} – {"Requiring Very Substantial Support" if criteria_b_level == 3 else "Requiring Substantial Support" if criteria_b_level == 2 else "Requiring Support"}"""
+Criteria A - Social Communication Severity: Level {criteria_a_level} - {"Requiring Very Substantial Support" if criteria_a_level == 3 else "Requiring Substantial Support" if criteria_a_level == 2 else "Requiring Support"}
+Criteria B - Restricted / Repetitive Behaviors Severity: Level {criteria_b_level} - {"Requiring Very Substantial Support" if criteria_b_level == 3 else "Requiring Substantial Support" if criteria_b_level == 2 else "Requiring Support"}"""
     return text
 
 
@@ -410,7 +410,7 @@ def extract_obs_from_image(image_bytes):
         model="meta-llama/llama-4-scout-17b-16e-instruct",
         messages=[{"role":"user","content":[
             {"type":"image_url","image_url":{"url":f"data:{mime};base64,{b64}"}},
-            {"type":"text","text":"Transcribe these handwritten behavioral observation notes and rewrite as polished clinical language for a psychological evaluation report. Only include content that is clearly clinical in nature — observations about the patient's behavior, attention, responses, affect, or test performance. Ignore any annotations that appear to be developer or tester notes (e.g. 'null handling', 'missing score logic', 'useful to test', 'TODO', etc.). Return only the clinical paragraph(s)."}
+            {"type":"text","text":"Transcribe these handwritten behavioral observation notes and rewrite as polished clinical language for a psychological evaluation report. Only include content that is clearly clinical in nature - observations about the patient's behavior, attention, responses, affect, or test performance. Ignore any annotations that appear to be developer or tester notes (e.g. 'null handling', 'missing score logic', 'useful to test', 'TODO', etc.). Return only the clinical paragraph(s)."}
         ]}],
         temperature=0.2, max_tokens=1024,
     )
@@ -597,7 +597,7 @@ st.caption("De-identified inputs only · All drafts require clinician review and
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 1 — HEADER INFO
+# BLOCK 1 - HEADER INFO
 # ══════════════════════════════════════════════════════════════════════
 st.subheader("Patient & Evaluation Info")
 st.info("Use first name or initials only. No last name, no full DOB.")
@@ -621,7 +621,7 @@ with col2:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 2 — REASON FOR REFERRAL
+# BLOCK 2 - REASON FOR REFERRAL
 # ══════════════════════════════════════════════════════════════════════
 st.subheader("Reason for Referral")
 referral_by      = st.selectbox("Referred by", ["Parent/Guardian","School District","Pediatrician","OPWDD Office","Court/Legal","Self-Referral","Other"])
@@ -629,23 +629,23 @@ referral_concern = st.text_area("Presenting concerns", placeholder="e.g. Parent 
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 3 — TESTS ADMINISTERED
+# BLOCK 3 - TESTS ADMINISTERED
 # ══════════════════════════════════════════════════════════════════════
 st.subheader("Evaluation Materials")
 col1, col2 = st.columns(2)
 with col1:
     use_wppsi   = st.checkbox("WPPSI-IV (Cognitive)", value=True)
-    use_wisc    = st.checkbox("WISC-V (Cognitive — if age 6+)")
+    use_wisc    = st.checkbox("WISC-V (Cognitive - if age 6+)")
     use_ados    = st.checkbox("ADOS-2", value=True)
 with col2:
-    use_basc    = st.checkbox("BASC-3 PRS (Behavior — Parent Rating)", value=True)
-    use_vineland= st.checkbox("Vineland-3 (Adaptive Behavior — Parent)", value=True)
+    use_basc    = st.checkbox("BASC-3 PRS (Behavior - Parent Rating)", value=True)
+    use_vineland= st.checkbox("Vineland-3 (Adaptive Behavior - Parent)", value=True)
     use_case    = st.checkbox("Case Materials / Records Review", value=True)
 extra_tests = st.text_input("Other tests (comma-separated)", placeholder="e.g. CARS-2, SRS-2")
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 4 — BACKGROUND
+# BLOCK 4 - BACKGROUND
 # ══════════════════════════════════════════════════════════════════════
 st.subheader("Background Information")
 _bg = st.session_state.get("extracted_bg", {})
@@ -693,7 +693,7 @@ with bg_manual:
     with st.expander("Prior Evaluations & Diagnoses", expanded=True):
         prior_evals_text = st.text_area("Prior evaluations (date, test, result summary)",
             value=_bg.get("prior_evals",""),
-            placeholder="e.g. Nov 2022 — Stanford Binet-5: Mildly Impaired range; CARS-2: Autism Spectrum; Vineland-3: Moderately Low to Low across all domains",
+            placeholder="e.g. Nov 2022 - Stanford Binet-5: Mildly Impaired range; CARS-2: Autism Spectrum; Vineland-3: Moderately Low to Low across all domains",
             height=80)
         prior_diagnoses = st.text_input("Prior diagnoses on record",
             value=_bg.get("prior_diagnoses",""),
@@ -774,7 +774,7 @@ with bg_manual:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 5 — BEHAVIORAL OBSERVATIONS
+# BLOCK 5 - BEHAVIORAL OBSERVATIONS
 # ══════════════════════════════════════════════════════════════════════
 st.subheader("Behavioral Observations")
 obs_photo, obs_type = st.tabs(["📷  Upload Photo of Handwritten Notes  ← start here", "✏️  Type / Dictate"])
@@ -805,12 +805,12 @@ with obs_type:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 6a — WPPSI-IV / WISC-V
+# BLOCK 6a - WPPSI-IV / WISC-V
 # ══════════════════════════════════════════════════════════════════════
 cog_scores = {}
 if use_wppsi or use_wisc:
     cog_label = "WPPSI-IV" if use_wppsi else "WISC-V"
-    st.subheader(f"Cognitive Assessment — {cog_label}")
+    st.subheader(f"Cognitive Assessment - {cog_label}")
 
     cog_photo, cog_manual = st.tabs(["📷  Upload Score Sheet Photo", "✏️  Manual Entry"])
     _cog = st.session_state.get("extracted_cog_scores", {})
@@ -831,7 +831,7 @@ if use_wppsi or use_wisc:
                         st.error(f"Extraction failed: {e}")
 
     with cog_manual:
-        obtained = st.radio("Were scores obtained?", ["Yes — full battery administered", "No — unable to obtain scores"], horizontal=True)
+        obtained = st.radio("Were scores obtained?", ["Yes - full battery administered", "No - unable to obtain scores"], horizontal=True)
         if "No" in obtained:
             cog_not_obtained_reason = st.text_area("Reason scores not obtained",
                 placeholder="e.g. Patient was unable to sustain attention and participate during this evaluation. Patient often uttered nonsense words to herself and provided no responses to any questions.",
@@ -854,11 +854,11 @@ if use_wppsi or use_wisc:
     st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 6b — BASC-3 PRS
+# BLOCK 6b - BASC-3 PRS
 # ══════════════════════════════════════════════════════════════════════
 basc_data = {}
 if use_basc:
-    st.subheader("BASC-3 — Behavior Assessment System for Children (Parent Rating Scales)")
+    st.subheader("BASC-3 - Behavior Assessment System for Children (Parent Rating Scales)")
 
     basc_photo, basc_manual = st.tabs(["📷  Upload Score Sheet Photo", "✏️  Manual Entry"])
     _basc = st.session_state.get("extracted_basc_scores", {})
@@ -939,11 +939,11 @@ if use_basc:
     st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 6c — VINELAND-3
+# BLOCK 6c - VINELAND-3
 # ══════════════════════════════════════════════════════════════════════
 vineland_data = {}
 if use_vineland:
-    st.subheader("Vineland-3 — Adaptive Behavior Scales")
+    st.subheader("Vineland-3 - Adaptive Behavior Scales")
 
     vin_photo, vin_manual = st.tabs(["📷  Upload Score Sheet Photo", "✏️  Manual Entry"])
     _vin = st.session_state.get("extracted_vin_scores", {})
@@ -992,20 +992,20 @@ if use_vineland:
         # OPWDD eligibility check
         if use_ados or True:
             if vin_abc <= 70:
-                st.error(f"ABC = {vin_abc} ≤ 70 — Meets adaptive deficit criterion for OPWDD / IDD eligibility")
+                st.error(f"ABC = {vin_abc} ≤ 70 - Meets adaptive deficit criterion for OPWDD / IDD eligibility")
             elif vin_abc <= 85:
-                st.warning(f"ABC = {vin_abc} — Moderately Low range (below average but above IDD threshold)")
+                st.warning(f"ABC = {vin_abc} - Moderately Low range (below average but above IDD threshold)")
             else:
-                st.success(f"ABC = {vin_abc} — Within or above average adaptive range")
+                st.success(f"ABC = {vin_abc} - Within or above average adaptive range")
 
     st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 6d — ADOS-2
+# BLOCK 6d - ADOS-2
 # ══════════════════════════════════════════════════════════════════════
 ados_data = {}
 if use_ados:
-    st.subheader("ADOS-2 — Autism Diagnostic Observation Schedule")
+    st.subheader("ADOS-2 - Autism Diagnostic Observation Schedule")
 
     ados_photo, ados_manual = st.tabs(["📷  Upload Score Sheet Photo", "✏️  Manual Entry"])
     _ados = st.session_state.get("extracted_ados_scores", {})
@@ -1034,7 +1034,7 @@ if use_ados:
             ados_rrb = st.number_input("Restricted & Repetitive Behavior (RRB) raw score", 0, 10, int(_ados.get("RRB",8)))
             ados_combined = ados_sa + ados_rrb
             st.metric("Algorithm Combined Total (SA + RRB)", ados_combined)
-            ados_comparison = st.number_input("Comparison Score (1–10)", 1, 10, int(_ados.get("Comparison Score",10)))
+            ados_comparison = st.number_input("Comparison Score (1-10)", 1, 10, int(_ados.get("Comparison Score",10)))
 
         with col2:
             # Auto-classify
@@ -1080,9 +1080,9 @@ if use_ados:
                 placeholder="e.g. Area of Receptive-Expressive Language Processing")
         with col2:
             criteria_a_level = st.selectbox("Criteria A Severity (Social Communication)", [1,2,3], index=2,
-                format_func=lambda x: f"Level {x} — {'Requiring Support' if x==1 else 'Requiring Substantial Support' if x==2 else 'Requiring Very Substantial Support'}")
+                format_func=lambda x: f"Level {x} - {'Requiring Support' if x==1 else 'Requiring Substantial Support' if x==2 else 'Requiring Very Substantial Support'}")
             criteria_b_level = st.selectbox("Criteria B Severity (RRB)", [1,2,3], index=0,
-                format_func=lambda x: f"Level {x} — {'Requiring Support' if x==1 else 'Requiring Substantial Support' if x==2 else 'Requiring Very Substantial Support'}")
+                format_func=lambda x: f"Level {x} - {'Requiring Support' if x==1 else 'Requiring Substantial Support' if x==2 else 'Requiring Very Substantial Support'}")
 
         ados_data = {
             "module": ados_module, "module_reason": ados_module_reason,
@@ -1098,7 +1098,7 @@ if use_ados:
     st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 7 — DIAGNOSIS + RECOMMENDATIONS
+# BLOCK 7 - DIAGNOSIS + RECOMMENDATIONS
 # ══════════════════════════════════════════════════════════════════════
 st.subheader("Conclusion & Recommendations")
 
@@ -1106,24 +1106,24 @@ col1, col2 = st.columns(2)
 with col1:
     st.markdown("**Primary Diagnosis (DSM-5)**")
     primary_dx = st.selectbox("Primary diagnosis", [
-        "F84.0 — Autism Spectrum Disorder",
-        "F84.0 — ASD (Level 1: Requiring Support)",
-        "F84.0 — ASD (Level 2: Requiring Substantial Support)",
-        "F84.0 — ASD (Level 3: Requiring Very Substantial Support)",
-        "F70 — Mild Intellectual Disability",
-        "F71 — Moderate Intellectual Disability",
-        "F72 — Severe Intellectual Disability",
-        "F73 — Profound Intellectual Disability",
-        "F88 — Other Disorders of Psychological Development",
-        "Rule Out ASD — Inconclusive",
+        "F84.0 - Autism Spectrum Disorder",
+        "F84.0 - ASD (Level 1: Requiring Support)",
+        "F84.0 - ASD (Level 2: Requiring Substantial Support)",
+        "F84.0 - ASD (Level 3: Requiring Very Substantial Support)",
+        "F70 - Mild Intellectual Disability",
+        "F71 - Moderate Intellectual Disability",
+        "F72 - Severe Intellectual Disability",
+        "F73 - Profound Intellectual Disability",
+        "F88 - Other Disorders of Psychological Development",
+        "Rule Out ASD - Inconclusive",
     ])
     additional_dx = st.text_input("Additional diagnoses", placeholder="e.g. F70 Mild ID, F80.9 Language Disorder")
 
 with col2:
     st.markdown("**Recommendations** *(check all that apply)*")
     rec_parent_meeting  = st.checkbox("Meet with parents to review results", value=True)
-    rec_medical_followup= st.checkbox("Medical follow-up — Psychiatrist or Neurologist", value=True)
-    rec_cpse            = st.checkbox("Contact NYC DOE / CPSE — submit report, request meeting", value=True)
+    rec_medical_followup= st.checkbox("Medical follow-up - Psychiatrist or Neurologist", value=True)
+    rec_cpse            = st.checkbox("Contact NYC DOE / CPSE - submit report, request meeting", value=True)
     rec_classification  = st.text_input("Proposed CSE classification change", placeholder="e.g. Multiple Disabilities (MD)")
     rec_parent_training = st.checkbox("Parent training via school district IEP", value=True)
     rec_aba             = st.checkbox("ABA therapy", value=True)
@@ -1135,7 +1135,7 @@ with col2:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
-# BLOCK 8 — CHECKLIST
+# BLOCK 8 - CHECKLIST
 # ══════════════════════════════════════════════════════════════════════
 st.subheader("Pre-Generation Checklist")
 col1, col2 = st.columns(2)
@@ -1162,9 +1162,9 @@ def build_eval_materials_list():
     tests = []
     if use_wppsi:   tests.append("Cognitive Scores from WPPSI-IV (Composite Subtests)")
     if use_wisc:    tests.append("Cognitive Scores from WISC-V (Composite Subtests)")
-    if use_ados:    tests.append(f"Autism Diagnostic Observation Schedule, Second Edition – {ados_data.get('module','Module 1')} (ADOS-2)")
-    if use_basc:    tests.append(f"Behavior Assessment System for Children – 3rd Edition ({basc_data.get('form','PRS-P')})")
-    if use_vineland:tests.append("Vineland Adaptive Behavior Scales – Parent")
+    if use_ados:    tests.append(f"Autism Diagnostic Observation Schedule, Second Edition - {ados_data.get('module','Module 1')} (ADOS-2)")
+    if use_basc:    tests.append(f"Behavior Assessment System for Children - 3rd Edition ({basc_data.get('form','PRS-P')})")
+    if use_vineland:tests.append("Vineland Adaptive Behavior Scales - Parent")
     if use_case:    tests.append("Case Materials Reviewed")
     if extra_tests: tests += [t.strip() for t in extra_tests.split(",") if t.strip()]
     return tests
@@ -1180,16 +1180,16 @@ def build_background_text():
     lines.append(f"\nParent interview conducted on {interview_date}.")
     lines.append(f"Family: {family_composition or 'Not specified'}")
     if family_hx: lines.append(f"Family history: {family_hx}")
-    lines.append(f"Communication: {comm_level}" + (f" — {echolalia_detail}" if echolalia and echolalia_detail else ""))
-    if not toilet_trained: lines.append("Not toilet trained — wears diapers.")
+    lines.append(f"Communication: {comm_level}" + (f" - {echolalia_detail}" if echolalia and echolalia_detail else ""))
+    if not toilet_trained: lines.append("Not toilet trained - wears diapers.")
     if feeding_difficulties: lines.append(f"Feeding: {feeding_difficulties}")
     if behavioral_concerns: lines.append(f"Behavioral concerns: {behavioral_concerns}")
-    lines.append(f"School: {school_name or 'Not specified'} — Placement: {school_placement_type or grade_placement or 'Not specified'}")
-    lines.append(f"IEP: {iep_status}" + (f" — Classification: {cse_classification}" if cse_classification else ""))
+    lines.append(f"School: {school_name or 'Not specified'} - Placement: {school_placement_type or grade_placement or 'Not specified'}")
+    lines.append(f"IEP: {iep_status}" + (f" - Classification: {cse_classification}" if cse_classification else ""))
     if birth_complications: lines.append(f"Birth/prenatal: {birth_complications}")
     if medical_diagnoses:   lines.append(f"Medical: {medical_diagnoses}")
     if current_meds:        lines.append(f"Medications: {current_meds}")
-    lines.append(f"Milestones — Walking: {milestone_walking}; Words: {milestone_words}; Phrases: {milestone_phrases}")
+    lines.append(f"Milestones - Walking: {milestone_walking}; Words: {milestone_words}; Phrases: {milestone_phrases}")
     if regression:          lines.append(f"Regression: {regression_detail or 'reported'}")
     return "\n".join(lines)
 
@@ -1227,7 +1227,7 @@ def build_prompt():
 {cog_label}:
 No composite score was obtained on the {cog_label}. {cog_scores.get('reason','')}"""
         else:
-            score_lines = "\n".join(f"  {k}: SS={v} ({ss_to_pct(v)}th %ile — {('Low' if v<70 else 'Borderline' if v<80 else 'Low Average' if v<90 else 'Average' if v<110 else 'High Average')})"
+            score_lines = "\n".join(f"  {k}: SS={v} ({ss_to_pct(v)}th %ile - {('Low' if v<70 else 'Borderline' if v<80 else 'Low Average' if v<90 else 'Average' if v<110 else 'High Average')})"
                                      for k,v in cog_scores.items() if k not in ("obtained","reason"))
             cog_section = f"\n{cog_label} scores:\n{score_lines}"
 
@@ -1264,17 +1264,17 @@ Write ONLY the following three sections. The other sections have already been ge
 Use the name "{patient_name or '[PATIENT]'}" throughout.
 
 ---
-SECTION TO WRITE 1 — BACKGROUND INFORMATION:
+SECTION TO WRITE 1 - BACKGROUND INFORMATION:
 Write a flowing clinical narrative (2-3 paragraphs) from these structured notes.
 First paragraph: prior evaluation history and results.
-Second paragraph: parent interview findings — family, communication, behaviors, school, services, diagnoses.
+Second paragraph: parent interview findings - family, communication, behaviors, school, services, diagnoses.
 Use formal language. Be specific. Include all details provided.
 
 Background notes:
 {bg}
 
 ---
-SECTION TO WRITE 2 — BEHAVIORAL OBSERVATIONS:
+SECTION TO WRITE 2 - BEHAVIORAL OBSERVATIONS:
 Expand these clinician notes into a full clinical narrative (2-3 paragraphs).
 Cover: arrival, appearance, motor, eye contact, communication, joint attention, play, attention, stereotypies, affect, effort.
 End with validity statement.
@@ -1283,7 +1283,7 @@ Clinician notes:
 {obs}
 
 ---
-SECTION TO WRITE 3 — CONCLUSION AND STATEMENT OF DIAGNOSIS:
+SECTION TO WRITE 3 - CONCLUSION AND STATEMENT OF DIAGNOSIS:
 Based on all assessment data below, write the conclusion paragraph.
 State that DSM-5 criteria are met (or not). Cite specific tests. Name the diagnosis: {primary_dx}.
 {"Additional: " + additional_dx if additional_dx else ""}
@@ -1334,7 +1334,7 @@ def assemble_full_report(llm_output):
     cog_label = "WPPSI-IV" if use_wppsi else ("WISC-V" if use_wisc else "Cognitive Assessment")
     if use_wppsi or use_wisc:
         if not cog_scores.get("obtained", True):
-            cog_text = f"""Wechsler Preschool Primary Scale of Intelligence – Fourth Edition ({cog_label})
+            cog_text = f"""Wechsler Preschool Primary Scale of Intelligence - Fourth Edition ({cog_label})
 
 No composite score was obtained on the {cog_label}. {cog_scores.get('reason','')}"""
         else:
@@ -1357,7 +1357,7 @@ No composite score was obtained on the {cog_label}. {cog_scores.get('reason','')
         ados_data["criteria_a_level"],ados_data["criteria_b_level"],patient_name
     ) if use_ados and ados_data else ""
 
-    report = f"""*** DRAFT — FOR CLINICIAN REVIEW AND SIGNATURE ONLY. NOT FOR DISTRIBUTION. ***
+    report = f"""*** DRAFT - FOR CLINICIAN REVIEW AND SIGNATURE ONLY. NOT FOR DISTRIBUTION. ***
 
 Psychological Autism Spectrum Disorder Evaluation
 Privileged and Confidential Information
@@ -1456,7 +1456,7 @@ elif not all_checked:
 # ══════════════════════════════════════════════════════════════════════
 
 def sanitize(text):
-    for k,v in [("—","-"),("–","-"),("'","'"),("'","'"),(""",'"'),(""",'"'),("…","..."),("•","-"),("™","")]:
+    for k,v in [("-","-"),("-","-"),("'","'"),("'","'"),(""",'"'),(""",'"'),("…","..."),("•","-"),("™","")]:
         text = text.replace(k,v)
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
@@ -1483,7 +1483,7 @@ def make_pdf(report_text):
         else:
             pdf.write(5.5, clean+"\n")
     pdf.ln(8); pdf.set_font("Helvetica","I",7); pdf.set_text_color(130,130,130)
-    pdf.write(5,"DRAFT — FOR CLINICIAN REVIEW AND SIGNATURE ONLY. Not for distribution without authorized sign-off.")
+    pdf.write(5,"DRAFT - FOR CLINICIAN REVIEW AND SIGNATURE ONLY. Not for distribution without authorized sign-off.")
     return pdf.output()
 
 def make_docx(report_text):
@@ -1530,7 +1530,7 @@ if "report" in st.session_state:
     st.subheader("Draft Report")
     st.warning("AI-generated DRAFT. Clinician must review, edit, and sign before any use or distribution.")
 
-    edited = st.text_area("Report (editable — changes saved on re-generate)", st.session_state["report"], height=700)
+    edited = st.text_area("Report (editable - changes saved on re-generate)", st.session_state["report"], height=700)
 
     st.divider()
     st.subheader("Export")
@@ -1557,7 +1557,7 @@ if "report" in st.session_state:
                     try:
                         msg = MIMEMultipart()
                         msg["From"]=sender; msg["To"]=to_email
-                        msg["Subject"]=f"[DRAFT] ASD Evaluation — {patient_name or 'patient'}"
+                        msg["Subject"]=f"[DRAFT] ASD Evaluation - {patient_name or 'patient'}"
                         body = f"Dear {to_name or 'Colleague'},\n\nPlease find attached the draft ASD evaluation report.\n\nThis is an AI-generated DRAFT requiring clinician review and sign-off before use.\n\n{note}\n\nWarm regards,\n{examiner_name or 'Rimon Health'}\nRimon Health\n\n---\nDRAFT only."
                         msg.attach(MIMEText(body,"plain"))
                         part = MIMEBase("application","octet-stream"); part.set_payload(pdf_bytes)
