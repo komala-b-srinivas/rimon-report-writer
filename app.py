@@ -31,10 +31,26 @@ def check_password():
         st.session_state.authenticated = False
 
     if not st.session_state.authenticated:
-        st.markdown("## 🔒 Rimon Health — Report Writer")
-        st.markdown("Enter the access password to continue.")
-        pw = st.text_input("Password", type="password")
-        if st.button("Login"):
+        st.markdown("""
+        <style>
+        .login-box {
+            max-width: 420px; margin: 80px auto 0; background: white;
+            border-radius: 16px; padding: 48px 40px;
+            box-shadow: 0 8px 32px rgba(75,174,232,0.15);
+            border-top: 4px solid #4BAEE8; text-align: center;
+        }
+        .login-box img { height: 72px; margin-bottom: 20px; }
+        .login-box h2 { font-size: 20px; font-weight: 700; color: #1a1a2e; margin: 0 0 6px; }
+        .login-box p { font-size: 13px; color: #6b7280; margin: 0 0 28px; }
+        </style>
+        <div class="login-box">
+            <img src="https://static.wixstatic.com/media/022991_02a105832a4745979b94f16debb093a8~mv2.png" />
+            <h2>Report Writer</h2>
+            <p>Enter your access password to continue</p>
+        </div>
+        """, unsafe_allow_html=True)
+        pw = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Enter password")
+        if st.button("Login", use_container_width=True):
             correct = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", ""))
             if pw == correct:
                 st.session_state.authenticated = True
@@ -402,12 +418,182 @@ def extract_obs_from_image(image_bytes):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# APP LAYOUT STARTS
+# THEME / CUSTOM CSS
 # ══════════════════════════════════════════════════════════════════════
 
-st.markdown("## Rimon Health")
-st.markdown("### Psychological Autism Spectrum Disorder Evaluation — Report Writer")
-st.caption("Internal use only · De-identified inputs · All drafts require clinician review and signature")
+st.markdown("""
+<style>
+/* ── Global ── */
+html, body, [class*="css"] {
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+    background-color: #f7f9fc;
+    color: #1a1a2e;
+}
+
+/* ── Hide Streamlit chrome ── */
+#MainMenu, footer, header { visibility: hidden; }
+
+/* ── Main container ── */
+.block-container {
+    padding-top: 0 !important;
+    max-width: 1100px;
+}
+
+/* ── Top header bar ── */
+.rh-header {
+    background: #ffffff;
+    border-bottom: 3px solid #4BAEE8;
+    padding: 18px 32px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 28px;
+    border-radius: 0 0 12px 12px;
+    box-shadow: 0 2px 12px rgba(75,174,232,0.10);
+}
+.rh-header img { height: 56px; }
+.rh-header-text h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a1a2e;
+    letter-spacing: -0.3px;
+}
+.rh-header-text p {
+    margin: 2px 0 0;
+    font-size: 13px;
+    color: #4BAEE8;
+    font-weight: 500;
+}
+.rh-badge {
+    margin-left: auto;
+    background: #eef7fd;
+    color: #4BAEE8;
+    border: 1px solid #4BAEE8;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}
+
+/* ── Section headers ── */
+h2, h3 { color: #1a1a2e !important; font-weight: 700 !important; }
+
+/* ── Subheader pill ── */
+.stSubheader {
+    background: linear-gradient(90deg, #eef7fd, #f7f9fc);
+    border-left: 4px solid #4BAEE8;
+    padding: 10px 16px !important;
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 16px !important;
+}
+
+/* ── Input fields ── */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea,
+.stSelectbox > div > div {
+    border: 1px solid #d0e8f7 !important;
+    border-radius: 8px !important;
+    background: #ffffff !important;
+    font-size: 14px !important;
+}
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {
+    border-color: #4BAEE8 !important;
+    box-shadow: 0 0 0 3px rgba(75,174,232,0.15) !important;
+}
+
+/* ── Buttons ── */
+.stButton > button {
+    background: #4BAEE8 !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 14px !important;
+    padding: 10px 24px !important;
+    transition: all 0.2s ease !important;
+}
+.stButton > button:hover {
+    background: #2a8fd4 !important;
+    box-shadow: 0 4px 12px rgba(75,174,232,0.35) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+    background: #eef7fd;
+    border-radius: 10px;
+    padding: 4px;
+    gap: 4px;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px !important;
+    font-weight: 500 !important;
+    font-size: 13px !important;
+    color: #4BAEE8 !important;
+}
+.stTabs [aria-selected="true"] {
+    background: #4BAEE8 !important;
+    color: white !important;
+}
+
+/* ── Cards (expanders) ── */
+.streamlit-expanderHeader {
+    background: #f0f8fe !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    color: #1a1a2e !important;
+}
+.streamlit-expanderContent {
+    border: 1px solid #d0e8f7 !important;
+    border-top: none !important;
+    border-radius: 0 0 8px 8px !important;
+    background: #ffffff !important;
+}
+
+/* ── Info / success / error boxes ── */
+.stAlert {
+    border-radius: 8px !important;
+    font-size: 13px !important;
+}
+
+/* ── Divider ── */
+hr { border-color: #d0e8f7 !important; margin: 28px 0 !important; }
+
+/* ── Checkbox ── */
+.stCheckbox > label { font-size: 14px !important; color: #1a1a2e !important; }
+
+/* ── Download buttons ── */
+.stDownloadButton > button {
+    background: #1a1a2e !important;
+    color: white !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+}
+.stDownloadButton > button:hover {
+    background: #2d2d4e !important;
+}
+
+/* ── Spinner ── */
+.stSpinner > div { border-top-color: #4BAEE8 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── TOP HEADER BAR ──
+st.markdown("""
+<div class="rh-header">
+    <img src="https://static.wixstatic.com/media/022991_02a105832a4745979b94f16debb093a8~mv2.png" />
+    <div class="rh-header-text">
+        <h1>ASD Evaluation Report Writer</h1>
+        <p>Accessible Neuropsych Assessments</p>
+    </div>
+    <span class="rh-badge">INTERNAL USE ONLY</span>
+</div>
+""", unsafe_allow_html=True)
+
+st.caption("De-identified inputs only · All drafts require clinician review and signature before release")
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
