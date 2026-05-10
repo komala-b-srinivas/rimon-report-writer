@@ -687,25 +687,73 @@ with st.expander("Record or Upload Session Audio to Auto-Fill Fields", expanded=
 
     if bg_input_mode == "Record in-app":
         bg_mic = st.audio_input("Record session", key="bg_mic")
-        if bg_mic and st.button("Transcribe Recording", type="primary", key="bg_mic_btn"):
-            with st.spinner("Transcribing..."):
-                try:
-                    t = transcribe_audio(bg_mic.read(), "session.wav")
-                    st.session_state["transcript"] = t
-                    st.success("Transcribed. Click Extract below.")
-                except Exception as e:
-                    st.error(f"Failed: {e}")
+        if bg_mic:
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Transcribe", type="primary", key="bg_mic_btn"):
+                    with st.spinner("Transcribing..."):
+                        try:
+                            t = transcribe_audio(bg_mic.read(), "session.wav")
+                            st.session_state["transcript"] = t
+                            st.success("Transcribed. Click Extract below.")
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
+            with col_b:
+                if st.button("Transcribe + Convert to Clinical Language", key="bg_mic_clinical_btn"):
+                    with st.spinner("Transcribing and converting..."):
+                        try:
+                            t = transcribe_audio(bg_mic.read(), "session.wav")
+                            polish_prompt = f"""A clinician recorded the following background intake session with a patient's family.
+Rewrite this into formal clinical language suitable for the Background Information section of a psychological evaluation report.
+Write in third person. Cover all details mentioned. Do not add information not present.
+Return only the clinical narrative paragraphs.
+
+Recording transcript: {t}"""
+                            resp = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role":"user","content":polish_prompt}],
+                                temperature=0.2, max_tokens=2048,
+                            )
+                            clinical_text = resp.choices[0].message.content.strip()
+                            st.session_state["transcript"] = clinical_text
+                            st.success("Done. Review below.")
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
 
     elif bg_input_mode == "Upload audio file":
         af = st.file_uploader("Session recording", type=["mp3","mp4","m4a","wav","webm"], key="bg_upload")
-        if af and st.button("Transcribe", type="primary", key="bg_upload_btn"):
-            with st.spinner("Transcribing..."):
-                try:
-                    t = transcribe_audio(af.read(), af.name)
-                    st.session_state["transcript"] = t
-                    st.success("Transcribed. Click Extract below.")
-                except Exception as e:
-                    st.error(f"Failed: {e}")
+        if af:
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Transcribe", type="primary", key="bg_upload_btn"):
+                    with st.spinner("Transcribing..."):
+                        try:
+                            t = transcribe_audio(af.read(), af.name)
+                            st.session_state["transcript"] = t
+                            st.success("Transcribed. Click Extract below.")
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
+            with col_b:
+                if st.button("Transcribe + Convert to Clinical Language", key="bg_upload_clinical_btn"):
+                    with st.spinner("Transcribing and converting..."):
+                        try:
+                            t = transcribe_audio(af.read(), af.name)
+                            polish_prompt = f"""A clinician recorded the following background intake session with a patient's family.
+Rewrite this into formal clinical language suitable for the Background Information section of a psychological evaluation report.
+Write in third person. Cover all details mentioned. Do not add information not present.
+Return only the clinical narrative paragraphs.
+
+Recording transcript: {t}"""
+                            resp = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role":"user","content":polish_prompt}],
+                                temperature=0.2, max_tokens=2048,
+                            )
+                            clinical_text = resp.choices[0].message.content.strip()
+                            st.session_state["transcript"] = clinical_text
+                            st.success("Done. Review below.")
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
 
     else:
         pasted = st.text_area("Paste transcript", value=st.session_state.get("transcript",""), height=150, key="bg_paste")
