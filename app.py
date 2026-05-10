@@ -1504,6 +1504,7 @@ if st.button("Generate Report", disabled=not all_checked, type="primary", use_co
                 llm_out    = run_llm(prompt)
                 full_report = assemble_full_report(llm_out)
                 st.session_state["report"]      = full_report
+                st.session_state["llm_out"]     = llm_out
                 st.session_state["report_ts"]   = datetime.now().strftime("%Y%m%d_%H%M")
                 st.success("Draft generated. Review carefully before use.")
             except Exception as e:
@@ -1586,87 +1587,796 @@ def add_score_table(doc, headers, rows, accent_color="4BAEE8"):
                 tcPr.append(shd)
     doc.add_paragraph()
 
-def make_docx(report_text):
+def _shd_cell(cell, fill_hex):
+    """Apply a background fill to a table cell."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), fill_hex)
+    tcPr.append(shd)
+
+def _bold_row(row):
+    """Make every run in every cell of a table row bold."""
+    for cell in row.cells:
+        for para in cell.paragraphs:
+            for run in para.runs:
+                run.bold = True
+
+def _set_cell_font(cell, size_pt=9, bold=False):
+    for para in cell.paragraphs:
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in para.runs:
+            run.font.size = Pt(size_pt)
+            run.bold = bold
+
+def _add_section_heading(doc, text):
+    """Bold + underlined section heading (e.g. 'Reason for Referral:')."""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(10)
+    p.paragraph_format.space_after  = Pt(4)
+    r = p.add_run(text)
+    r.bold      = True
+    r.underline = True
+    r.font.size = Pt(11)
+    r.font.name = "Times New Roman"
+    return p
+
+def _add_subheading(doc, text):
+    """Bold + underlined sub-assessment heading (e.g. 'WPPSI-IV')."""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(8)
+    p.paragraph_format.space_after  = Pt(2)
+    r = p.add_run(text)
+    r.bold      = True
+    r.underline = True
+    r.font.size = Pt(11)
+    r.font.name = "Times New Roman"
+    return p
+
+def _add_body(doc, text, space_before=0, space_after=6):
+    """Standard body paragraph."""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(space_before)
+    p.paragraph_format.space_after  = Pt(space_after)
+    r = p.add_run(text)
+    r.font.size = Pt(11)
+    r.font.name = "Times New Roman"
+    return p
+
+def _parse_llm_section(llm_output, header):
+    """Extract a named section from the LLM output string."""
+    import re
+    pattern = rf"{re.escape(header)}\s*\n(.*?)(?=\n[A-Z][A-Z ]+:|\Z)"
+    m = re.search(pattern, llm_output, re.DOTALL | re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+def _add_horizontal_rule(doc):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(4)
+    p.paragraph_format.space_after  = Pt(4)
+    pPr = p._p.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"),   "single")
+    bottom.set(qn("w:sz"),    "6")
+    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:color"), "999999")
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+    return p
+
+def _wppsi_wisc_table(doc, cog_label):
+    """8-column WPPSI/WISC Composite Score Summary table."""
+    headers = [
+        "Composite", "Abbrev.", "Sum of\nScaled Scores",
+        "Composite\nScore", "Percentile\nRank",
+        "90% Confidence\nInterval", "Qualitative\nDescription", "SEM"
+    ]
+    col_widths_pct = [22, 8, 9, 9, 9, 13, 17, 5]
+    total_dxa = 8640  # table width in DXA (6 inches)
+    col_dxas  = [int(total_dxa * p / 100) for p in col_widths_pct]
+
+    ABBREV = {
+        "Full Scale IQ (FSIQ)":       "FSIQ",
+        "Verbal Comprehension (VCI)":  "VCI",
+        "Visual Spatial (VSI)":        "VSI",
+        "Fluid Reasoning (FRI)":       "FRI",
+        "Working Memory (WMI)":        "WMI",
+        "Processing Speed (PSI)":      "PSI",
+        "General Ability (GAI)":       "GAI",
+        "Cognitive Proficiency (CPI)": "CPI",
+    }
+    QUAL = {
+        range(130, 165): "Extremely High",
+        range(120, 130): "Very High",
+        range(110, 120): "High Average",
+        range( 90, 110): "Average",
+        range( 80,  90): "Low Average",
+        range( 70,  80): "Borderline",
+        range(  0,  70): "Extremely Low",
+    }
+    def qual_desc(ss):
+        for rng, label in QUAL.items():
+            if ss in rng: return label
+        return "Extremely Low"
+
+    rows_data = []
+    for k, v in cog_scores.items():
+        if k in ("obtained", "reason"): continue
+        pct    = ss_to_pct(v)
+        ci_lo  = v - 7
+        ci_hi  = v + 7
+        abbrev = ABBREV.get(k, k[:6])
+        rows_data.append([k, abbrev, "-", str(v), f"{pct}th",
+                          f"{ci_lo}-{ci_hi}", qual_desc(v), "-"])
+
+    tbl = doc.add_table(rows=1 + len(rows_data), cols=8)
+    tbl.style = "Table Grid"
+    # Header
+    hdr = tbl.rows[0]
+    for i, (h, dxa) in enumerate(zip(headers, col_dxas)):
+        c = hdr.cells[i]
+        c.width = Inches(dxa / 1440)
+        c.text  = h
+        _shd_cell(c, "D9D9D9")
+        for para in c.paragraphs:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in para.runs:
+                run.bold      = True
+                run.font.size = Pt(8)
+                run.font.name = "Times New Roman"
+    # Data rows
+    for ri, row_vals in enumerate(rows_data):
+        row = tbl.rows[ri + 1]
+        for ci, (val, dxa) in enumerate(zip(row_vals, col_dxas)):
+            c = row.cells[ci]
+            c.width = Inches(dxa / 1440)
+            c.text  = val
+            if ci == 0:
+                for para in c.paragraphs:
+                    for run in para.runs:
+                        run.font.size = Pt(9)
+                        run.font.name = "Times New Roman"
+            else:
+                for para in c.paragraphs:
+                    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    for run in para.runs:
+                        run.font.size = Pt(9)
+                        run.font.name = "Times New Roman"
+        if ri % 2 == 1:
+            for c in row.cells:
+                _shd_cell(c, "EEF7FD")
+    doc.add_paragraph()
+
+def _basc3_composite_table(doc):
+    """5-column BASC-3 Composite Score Summary."""
+    headers = ["Scale", "Raw Score", "T Score", "Percentile Rank", "90% Confidence Interval"]
+    composites = [
+        ("Externalizing Problems Composite",
+         basc_data.get("ext_t",""),   basc_data.get("ext_pct","")),
+        ("Internalizing Problems Composite",
+         basc_data.get("int_t",""),   basc_data.get("int_pct","")),
+        ("Behavioral Symptoms Index",
+         basc_data.get("bsi_t",""),   basc_data.get("bsi_pct","")),
+        ("Adaptive Skills Composite",
+         basc_data.get("adp_t",""),   basc_data.get("adp_pct","")),
+    ]
+    rows_data = []
+    for name, t, pct in composites:
+        ci = f"{t-5}-{t+5}" if isinstance(t, (int,float)) else "-"
+        rows_data.append([name, "-", str(t) if t != "" else "-",
+                          f"{pct}th" if pct != "" else "-", ci])
+
+    tbl = doc.add_table(rows=1 + len(rows_data), cols=5)
+    tbl.style = "Table Grid"
+    col_dxas  = [3240, 1080, 1080, 1440, 1800]
+    hdr = tbl.rows[0]
+    for i, (h, dxa) in enumerate(zip(headers, col_dxas)):
+        c = hdr.cells[i]
+        c.width = Inches(dxa / 1440)
+        c.text  = h
+        _shd_cell(c, "D9D9D9")
+        for para in c.paragraphs:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in para.runs:
+                run.bold = True; run.font.size = Pt(9); run.font.name = "Times New Roman"
+    for ri, row_vals in enumerate(rows_data):
+        row = tbl.rows[ri + 1]
+        for ci, (val, dxa) in enumerate(zip(row_vals, col_dxas)):
+            c = row.cells[ci]
+            c.width = Inches(dxa / 1440)
+            c.text  = val
+            align = WD_ALIGN_PARAGRAPH.LEFT if ci == 0 else WD_ALIGN_PARAGRAPH.CENTER
+            for para in c.paragraphs:
+                para.alignment = align
+                for run in para.runs:
+                    run.font.size = Pt(9); run.font.name = "Times New Roman"
+        if ri % 2 == 1:
+            for c in row.cells: _shd_cell(c, "EEF7FD")
+    doc.add_paragraph()
+
+def _basc3_scale_table(doc):
+    """7-column BASC-3 Scale Score Summary."""
+    headers = ["Scale", "Raw Score", "T Score", "Percentile Rank",
+               "90% Confidence Interval", "Ipsative Comparison:\nDifference", "Significance Level"]
+    scale_keys = [
+        ("Hyperactivity",            "hyperactivity_t",            "hyperactivity_pct",            False),
+        ("Aggression",               "aggression_t",               "aggression_pct",               False),
+        ("Anxiety",                  "anxiety_t",                  "anxiety_pct",                  False),
+        ("Depression",               "depression_t",               "depression_pct",               False),
+        ("Somatization",             "somatization_t",             "somatization_pct",             False),
+        ("Atypicality",              "atypicality_t",              "atypicality_pct",              False),
+        ("Withdrawal",               "withdrawal_t",               "withdrawal_pct",               False),
+        ("Attention Problems",       "attention_problems_t",       "attention_problems_pct",       False),
+        ("Adaptability",             "adaptability_t",             "adaptability_pct",             True),
+        ("Social Skills",            "social_skills_t",            "social_skills_pct",            True),
+        ("Activities of Daily Living","activities_of_daily_living_t","activities_of_daily_living_pct",True),
+        ("Functional Communication", "functional_communication_t", "functional_communication_pct", True),
+    ]
+    rows_data = []
+    for name, t_key, pct_key, adaptive in scale_keys:
+        t   = basc_data.get(t_key, "")
+        pct = basc_data.get(pct_key, "")
+        ci  = f"{t-5}-{t+5}" if isinstance(t, (int,float)) else "-"
+        rows_data.append([name, "-", str(t) if t != "" else "-",
+                          f"{pct}th" if pct != "" else "-", ci, "-", "-"])
+
+    col_dxas = [2160, 864, 864, 1080, 1440, 1296, 1296]
+    tbl = doc.add_table(rows=1 + len(rows_data), cols=7)
+    tbl.style = "Table Grid"
+    hdr = tbl.rows[0]
+    for i, (h, dxa) in enumerate(zip(headers, col_dxas)):
+        c = hdr.cells[i]
+        c.width = Inches(dxa / 1440)
+        c.text  = h
+        _shd_cell(c, "D9D9D9")
+        for para in c.paragraphs:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in para.runs:
+                run.bold = True; run.font.size = Pt(8); run.font.name = "Times New Roman"
+    for ri, row_vals in enumerate(rows_data):
+        row = tbl.rows[ri + 1]
+        for ci, (val, dxa) in enumerate(zip(row_vals, col_dxas)):
+            c = row.cells[ci]
+            c.width = Inches(dxa / 1440)
+            c.text  = val
+            align = WD_ALIGN_PARAGRAPH.LEFT if ci == 0 else WD_ALIGN_PARAGRAPH.CENTER
+            for para in c.paragraphs:
+                para.alignment = align
+                for run in para.runs:
+                    run.font.size = Pt(9); run.font.name = "Times New Roman"
+        if ri % 2 == 1:
+            for c in row.cells: _shd_cell(c, "EEF7FD")
+    doc.add_paragraph()
+
+def _vineland_abc_table(doc):
+    """7-column Vineland ABC and Domain Score Summary."""
+    headers = [
+        "Domain",
+        "Standard Score (SS)",
+        "90% Confidence Interval",
+        "Percentile Rank",
+        "SS Minus Mean SS*",
+        "Strength or Weakness**",
+        "Base Rate"
+    ]
+    abc   = vineland_data.get("abc",  "-")
+    comm  = vineland_data.get("comm", "-")
+    daily = vineland_data.get("daily","-")
+    soc   = vineland_data.get("social","-")
+    comm_pct  = vineland_data.get("comm_pct",  "-")
+    daily_pct = vineland_data.get("daily_pct", "-")
+    soc_pct   = vineland_data.get("social_pct","-")
+
+    def ci(ss): return f"{ss-7}-{ss+7}" if isinstance(ss, (int,float)) else "-"
+    abc_pct = ss_to_pct(abc) if isinstance(abc, (int,float)) else "-"
+
+    rows_data = [
+        ["Adaptive Behavior Composite (ABC)", str(abc),  ci(abc),  f"{abc_pct}th", "-", "-", "-"],
+        ["Communication",                     str(comm), ci(comm), f"{comm_pct}th", "-", "-", "-"],
+        ["Daily Living Skills",               str(daily),ci(daily),f"{daily_pct}th","-", "-", "-"],
+        ["Socialization",                     str(soc),  ci(soc),  f"{soc_pct}th",  "-", "-", "-"],
+    ]
+    col_dxas = [2160, 1080, 1440, 1080, 1080, 1080, 720]
+    tbl = doc.add_table(rows=1 + len(rows_data), cols=7)
+    tbl.style = "Table Grid"
+    hdr = tbl.rows[0]
+    for i, (h, dxa) in enumerate(zip(headers, col_dxas)):
+        c = hdr.cells[i]
+        c.width = Inches(dxa / 1440)
+        c.text  = h
+        _shd_cell(c, "D9D9D9")
+        for para in c.paragraphs:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in para.runs:
+                run.bold = True; run.font.size = Pt(8); run.font.name = "Times New Roman"
+    for ri, row_vals in enumerate(rows_data):
+        row = tbl.rows[ri + 1]
+        for ci_idx, (val, dxa) in enumerate(zip(row_vals, col_dxas)):
+            c = row.cells[ci_idx]
+            c.width = Inches(dxa / 1440)
+            c.text  = val
+            align = WD_ALIGN_PARAGRAPH.LEFT if ci_idx == 0 else WD_ALIGN_PARAGRAPH.CENTER
+            for para in c.paragraphs:
+                para.alignment = align
+                for run in para.runs:
+                    run.font.size = Pt(9); run.font.name = "Times New Roman"
+    doc.add_paragraph()
+
+def _vineland_qualitative_table(doc):
+    """2-column Vineland Qualitative Descriptors — patient row bolded."""
+    abc_score = vineland_data.get("abc", 0) if vineland_data else 0
+    levels = [
+        ("High",            "130-140", lambda s: s >= 130),
+        ("Moderately High", "115-129", lambda s: 115 <= s <= 129),
+        ("Adequate",        " 86-114", lambda s:  86 <= s <= 114),
+        ("Moderately Low",  " 71-85",  lambda s:  71 <= s <=  85),
+        ("Low",             " 20-70",  lambda s: s <= 70),
+    ]
+    headers = ["Adaptive Level", "Standard Score Range"]
+    col_dxas = [3600, 3600]
+    tbl = doc.add_table(rows=1 + len(levels), cols=2)
+    tbl.style = "Table Grid"
+    hdr = tbl.rows[0]
+    for i, (h, dxa) in enumerate(zip(headers, col_dxas)):
+        c = hdr.cells[i]
+        c.width = Inches(dxa / 1440)
+        c.text  = h
+        _shd_cell(c, "D9D9D9")
+        for para in c.paragraphs:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in para.runs:
+                run.bold = True; run.font.size = Pt(10); run.font.name = "Times New Roman"
+    for ri, (label, score_range, match_fn) in enumerate(levels):
+        row = tbl.rows[ri + 1]
+        is_patient = isinstance(abc_score, (int,float)) and match_fn(abc_score)
+        for ci_idx, (val, dxa) in enumerate(zip([label, score_range], col_dxas)):
+            c = row.cells[ci_idx]
+            c.width = Inches(dxa / 1440)
+            c.text  = val
+            for para in c.paragraphs:
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in para.runs:
+                    run.bold      = is_patient
+                    run.font.size = Pt(10)
+                    run.font.name = "Times New Roman"
+        if is_patient:
+            for c in row.cells: _shd_cell(c, "D9EBF7")
+    doc.add_paragraph()
+
+def _ados2_domain_table(doc):
+    """2-column ADOS-2 Domain Total table."""
+    sa   = ados_data.get("sa",  0)
+    rrb  = ados_data.get("rrb", 0)
+    comp = ados_data.get("comparison", "-")
+    clas = ados_data.get("classification", "-")
+    combined = sa + rrb
+    cs_label  = comparison_score_label(comp) if isinstance(comp, (int,float)) else str(comp)
+
+    rows_data = [
+        [f"Social Affect (SA): {sa}",               ados_sa_label(ados_data.get("module","Module 1"), sa)],
+        [f"Restricted and Repetitive Behavior (RRB): {rrb}", ados_rrb_label(rrb)],
+        [f"Algorithm Combined Total (SA) and (RRB): {combined}", cs_label],
+    ]
+    col_dxas = [4320, 4320]
+    tbl = doc.add_table(rows=1 + len(rows_data), cols=2)
+    tbl.style = "Table Grid"
+    hdr = tbl.rows[0]
+    for i, (h, dxa) in enumerate(zip(
+        ["ADOS Ratings Areas: Domain Total", "Autism Related Symptoms"], col_dxas
+    )):
+        c = hdr.cells[i]
+        c.width = Inches(dxa / 1440)
+        c.text  = h
+        _shd_cell(c, "D9D9D9")
+        for para in c.paragraphs:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in para.runs:
+                run.bold = True; run.font.size = Pt(10); run.font.name = "Times New Roman"
+    for ri, row_vals in enumerate(rows_data):
+        row = tbl.rows[ri + 1]
+        is_combined = (ri == 2)
+        for ci_idx, (val, dxa) in enumerate(zip(row_vals, col_dxas)):
+            c = row.cells[ci_idx]
+            c.width = Inches(dxa / 1440)
+            c.text  = val
+            for para in c.paragraphs:
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in para.runs:
+                    run.bold      = is_combined
+                    run.font.size = Pt(10)
+                    run.font.name = "Times New Roman"
+        if ri % 2 == 1:
+            for c in row.cells: _shd_cell(c, "EEF7FD")
+    doc.add_paragraph()
+
+def _asd_severity_table(doc):
+    """3-column ASD Severity Levels table (recreated as Word table)."""
+    rows_data = [
+        (
+            "Level 3: Requiring Very\nSubstantial Support",
+            "Severe deficits in verbal and nonverbal social communication skills cause severe impairments in functioning, very limited initiation of social interactions, and minimal response to social overtures from others.",
+            "Inflexibility of behaviour, extreme difficulty coping with change, or other restricted/repetitive behaviours markedly interfere with functioning in all spheres. Great distress/difficulty changing focus or action.",
+        ),
+        (
+            "Level 2: Requiring\nSubstantial Support",
+            "Marked deficits in verbal and nonverbal social communication skills; social impairments apparent even with supports in place; limited initiation of social interactions and reduced or abnormal response to social overtures from others.",
+            "Inflexibility of behaviour, difficulty coping with change, or other restricted/repetitive behaviours appear frequently enough to be obvious to the casual observer and interfere with functioning in a variety of contexts. Distress and/or difficulty changing focus or action.",
+        ),
+        (
+            "Level 1: Requiring Support",
+            "Without supports in place, deficits in social communication cause noticeable impairments. Has difficulty initiating social interactions and demonstrates clear examples of atypical or unsuccessful responses to social overtures of others. May appear to have decreased interest in social interactions.",
+            "Inflexibility of behaviour causes significant interference with functioning in one or more contexts. Difficulty switching between activities. Problems of organisation and planning hamper independence.",
+        ),
+    ]
+    col_dxas = [1440, 3600, 3600]
+    tbl = doc.add_table(rows=1 + len(rows_data), cols=3)
+    tbl.style = "Table Grid"
+    hdr = tbl.rows[0]
+    for i, (h, dxa) in enumerate(zip(
+        ["Severity Levels",
+         "Criteria A: Social Communication",
+         "Criteria B: Restricted and Repetitive Behaviours"],
+        col_dxas
+    )):
+        c = hdr.cells[i]
+        c.width = Inches(dxa / 1440)
+        c.text  = h
+        _shd_cell(c, "D9D9D9")
+        for para in c.paragraphs:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in para.runs:
+                run.bold = True; run.font.size = Pt(9); run.font.name = "Times New Roman"
+    for ri, (sev, crit_a, crit_b) in enumerate(rows_data):
+        row = tbl.rows[ri + 1]
+        for ci_idx, (val, dxa) in enumerate(zip([sev, crit_a, crit_b], col_dxas)):
+            c = row.cells[ci_idx]
+            c.width = Inches(dxa / 1440)
+            c.text  = val
+            for para in c.paragraphs:
+                para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                for run in para.runs:
+                    run.font.size = Pt(8.5)
+                    run.font.name = "Times New Roman"
+        if ri == 0:
+            for c in row.cells: _shd_cell(c, "F2F2F2")
+    doc.add_paragraph()
+
+def make_docx(llm_output):
+    """Build a professional Word document matching the Rimon Health evaluation report format."""
+    LOGO_PATH = "/Users/komalabelursrinivas/Desktop/rimon-prototype/rimon_logo.png"
+
     doc = Document()
+    # Page setup: US Letter, 1" margins
     for sec in doc.sections:
-        sec.top_margin    = Inches(1)
-        sec.bottom_margin = Inches(1)
-        sec.left_margin   = Inches(1.25)
-        sec.right_margin  = Inches(1.25)
+        sec.top_margin    = Inches(1.0)
+        sec.bottom_margin = Inches(1.0)
+        sec.left_margin   = Inches(1.0)
+        sec.right_margin  = Inches(1.0)
+        # Footer: www.Rimonhealth.com centered on every page
+        from docx.oxml import OxmlElement as _OE2
+        footer = sec.footer
+        fp = footer.paragraphs[0]
+        fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        fp.clear()
+        fr = fp.add_run("www.Rimonhealth.com")
+        fr.font.size = Pt(9)
+        fr.font.name = "Times New Roman"
 
-    for line in report_text.split("\n"):
-        line = line.strip()
-        if not line:
-            doc.add_paragraph()
-            continue
-        clean = line.replace("**","").replace("*","").replace("#","").strip()
-        if not clean: continue
+    # ── PAGE 1 HEADER ──────────────────────────────────────────────────
+    # Logo + contact on same line using a 2-cell table (no borders)
+    hdr_tbl = doc.add_table(rows=1, cols=2)
+    hdr_tbl.style = "Table Grid"
+    hdr_tbl.rows[0].cells[0].width = Inches(2.0)
+    hdr_tbl.rows[0].cells[1].width = Inches(5.5)
+    # Remove all borders from header table
+    for row in hdr_tbl.rows:
+        for cell in row.cells:
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            tcBdr = OxmlElement("w:tcBdr")
+            for side in ["top","left","bottom","right","insideH","insideV"]:
+                bdr = OxmlElement(f"w:{side}")
+                bdr.set(qn("w:val"),   "none")
+                bdr.set(qn("w:sz"),    "0")
+                bdr.set(qn("w:space"), "0")
+                bdr.set(qn("w:color"), "auto")
+                tcBdr.append(bdr)
+            tcPr.append(tcBdr)
 
-        is_draft = clean.startswith("***")
-        is_title = clean.startswith("Psychological Autism") or clean.startswith("Privileged")
-        is_hdr   = (clean.isupper() and 6 < len(clean) < 100)
-        is_scores_marker = clean.startswith("[[SCORES_TABLE]]")
+    # Left cell: logo
+    logo_cell = hdr_tbl.rows[0].cells[0]
+    logo_para = logo_cell.paragraphs[0]
+    logo_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    if os.path.exists(LOGO_PATH):
+        logo_run = logo_para.add_run()
+        logo_run.add_picture(LOGO_PATH, width=Inches(1.5))
+    else:
+        logo_run = logo_para.add_run("RIMON HEALTH")
+        logo_run.bold = True; logo_run.font.size = Pt(14)
 
-        if is_scores_marker:
-            # Insert score tables
-            if (use_wppsi or use_wisc) and cog_scores.get("obtained", True):
-                cog_label = "WPPSI-IV" if use_wppsi else "WISC-V"
-                p = doc.add_heading(f"{cog_label} - Composite Score Summary", level=3)
-                rows = []
-                for k, v in cog_scores.items():
-                    if k in ("obtained","reason"): continue
-                    pct = ss_to_pct(v)
-                    cls = "Low" if v < 70 else "Borderline" if v < 80 else "Low Average" if v < 90 else "Average" if v < 110 else "High Average"
-                    rows.append([k, str(v), f"{pct}th", cls])
-                add_score_table(doc, ["Index", "Standard Score", "Percentile", "Classification"], rows)
+    # Right cell: contact info
+    contact_cell = hdr_tbl.rows[0].cells[1]
+    contact_para = contact_cell.paragraphs[0]
+    contact_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    contact_para.paragraph_format.space_before = Pt(12)
+    cr = contact_para.add_run("1019 Broadway, Woodmere, NY 11598  |  347-746-6613  |  www.Rimonhealth.com")
+    cr.font.size = Pt(9)
+    cr.font.name = "Times New Roman"
 
-            if use_basc and basc_data:
-                doc.add_heading("BASC-3 PRS - Composite Summary", level=3)
-                composites = [
-                    ("Externalizing Problems", basc_data.get("ext_t",""), basc_data.get("ext_pct","")),
-                    ("Internalizing Problems", basc_data.get("int_t",""), basc_data.get("int_pct","")),
-                    ("Behavioral Symptoms Index", basc_data.get("bsi_t",""), basc_data.get("bsi_pct","")),
-                    ("Adaptive Skills", basc_data.get("adp_t",""), basc_data.get("adp_pct","")),
-                ]
-                rows = [[c[0], str(c[1]), f"{c[2]}th", t_classification(c[1]) if isinstance(c[1], (int,float)) else ""] for c in composites]
-                add_score_table(doc, ["Composite", "T Score", "Percentile", "Classification"], rows)
+    doc.add_paragraph()  # spacing after header table
 
-            if use_vineland and vineland_data:
-                doc.add_heading("Vineland-3 - Domain Score Summary", level=3)
-                rows = [
-                    ["Adaptive Behavior Composite (ABC)", str(vineland_data["abc"]), f"{ss_to_pct(vineland_data['abc'])}th", ss_adaptive_level(vineland_data["abc"])],
-                    ["Communication", str(vineland_data["comm"]), f"{vineland_data['comm_pct']}th", ss_adaptive_level(vineland_data["comm"])],
-                    ["Daily Living Skills", str(vineland_data["daily"]), f"{vineland_data['daily_pct']}th", ss_adaptive_level(vineland_data["daily"])],
-                    ["Socialization", str(vineland_data["social"]), f"{vineland_data['social_pct']}th", ss_adaptive_level(vineland_data["social"])],
-                ]
-                add_score_table(doc, ["Domain", "Standard Score", "Percentile", "Adaptive Level"], rows)
+    # Report title
+    title_p = doc.add_paragraph()
+    title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_p.paragraph_format.space_after = Pt(2)
+    tr = title_p.add_run("Psychological Autism Spectrum Disorder Evaluation")
+    tr.bold = True; tr.underline = True
+    tr.font.size = Pt(13)
+    tr.font.name = "Times New Roman"
 
-            if use_ados and ados_data:
-                doc.add_heading("ADOS-2 - Score Summary", level=3)
-                combined = ados_data["sa"] + ados_data["rrb"]
-                rows = [
-                    ["Social Affect (SA)", str(ados_data["sa"]), ados_sa_label(ados_data["module"], ados_data["sa"])],
-                    ["Restricted & Repetitive Behavior (RRB)", str(ados_data["rrb"]), ados_rrb_label(ados_data["rrb"])],
-                    ["Combined Total (SA + RRB)", str(combined), ados_data["classification"]],
-                    ["Comparison Score", str(ados_data["comparison"]), comparison_score_label(ados_data["comparison"])],
-                ]
-                add_score_table(doc, ["Score Area", "Score", "Classification"], rows)
-        elif is_draft:
-            p = doc.add_paragraph()
-            r = p.add_run(clean)
-            r.bold = True; r.italic = True
-            r.font.color.rgb = RGBColor(0xCC,0x00,0x00)
-            r.font.size = Pt(9)
-        elif is_title:
-            p = doc.add_heading(clean, level=1)
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        elif is_hdr:
-            p = doc.add_heading(clean, level=2)
+    conf_p = doc.add_paragraph()
+    conf_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    conf_p.paragraph_format.space_after = Pt(8)
+    cr2 = conf_p.add_run("Privileged and Confidential Information")
+    cr2.font.size = Pt(11)
+    cr2.font.name = "Times New Roman"
+
+    # ── PATIENT INFO TWO-COLUMN BLOCK ─────────────────────────────────
+    info_tbl = doc.add_table(rows=4, cols=4)
+    info_tbl.style = "Table Grid"
+    for row in info_tbl.rows:
+        for cell in row.cells:
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            tcBdr = OxmlElement("w:tcBdr")
+            for side in ["top","left","bottom","right","insideH","insideV"]:
+                bdr = OxmlElement(f"w:{side}")
+                bdr.set(qn("w:val"),   "none")
+                bdr.set(qn("w:sz"),    "0")
+                bdr.set(qn("w:space"), "0")
+                bdr.set(qn("w:color"), "auto")
+                tcBdr.append(bdr)
+            tcPr.append(tcBdr)
+
+    eval_date_str = eval_date.strftime("%m/%d/%Y") if hasattr(eval_date, "strftime") else str(eval_date)
+
+    info_data = [
+        # (left_label, left_value, right_label, right_value)
+        ("NAME:",          patient_name or "",       "DATE OF EVALUATION:",  eval_date_str),
+        ("D.O.B:",         dob_text or "",            "CHRONOLOGICAL AGE:",   chron_age or ""),
+        ("EXAMINER:",      examiner_name or "",       "LANGUAGE OF TESTING:", language),
+        ("SCHOOL DISTRICT:", school_name or "",      "GRADE:",               grade_placement or ""),
+    ]
+    col_widths = [Inches(1.4), Inches(2.8), Inches(1.6), Inches(1.7)]
+    for ri, (ll, lv, rl, rv) in enumerate(info_data):
+        row = info_tbl.rows[ri]
+        for ci, (val, w) in enumerate(zip([ll, lv, rl, rv], col_widths)):
+            c = row.cells[ci]
+            c.width = w
+            c.paragraphs[0].clear()
+            r = c.paragraphs[0].add_run(val)
+            r.font.size = Pt(10)
+            r.font.name = "Times New Roman"
+            if ci in (0, 2):  # label columns
+                r.bold = True
+
+    doc.add_paragraph()
+    _add_horizontal_rule(doc)
+
+    # ── REASON FOR REFERRAL ───────────────────────────────────────────
+    _add_section_heading(doc, "Reason for Referral:")
+    ref_text = (
+        f"{patient_name or 'The patient'} was referred to the examiner for a psychological evaluation "
+        f"by {referral_by.lower() if referral_by else 'a referring party'}. "
+        f"{referral_concern or ''}"
+    )
+    _add_body(doc, ref_text)
+
+    _add_horizontal_rule(doc)
+
+    # ── EVALUATION MATERIALS ──────────────────────────────────────────
+    _add_section_heading(doc, "Evaluation Materials:")
+    for mat in build_eval_materials_list():
+        p = doc.add_paragraph(style="List Bullet")
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after  = Pt(2)
+        r = p.add_run(mat)
+        r.font.size = Pt(11)
+        r.font.name = "Times New Roman"
+
+    _add_horizontal_rule(doc)
+
+    # ── BACKGROUND INFORMATION (LLM) ──────────────────────────────────
+    _add_section_heading(doc, "Background Information:")
+    bg_text = _parse_llm_section(llm_output, "BACKGROUND INFORMATION:")
+    if bg_text:
+        for para_text in bg_text.split("\n\n"):
+            if para_text.strip():
+                _add_body(doc, para_text.strip())
+    else:
+        _add_body(doc, "[Background information not available]")
+
+    _add_horizontal_rule(doc)
+
+    # ── BEHAVIORAL OBSERVATION (LLM) ──────────────────────────────────
+    _add_section_heading(doc, "Behavioral Observation:")
+    obs_text = _parse_llm_section(llm_output, "BEHAVIORAL OBSERVATIONS:")
+    if obs_text:
+        for para_text in obs_text.split("\n\n"):
+            if para_text.strip():
+                _add_body(doc, para_text.strip())
+    else:
+        _add_body(doc, "[Behavioral observations not available]")
+
+    _add_horizontal_rule(doc)
+
+    # ── PRIOR EVAL RECORDS (optional) ─────────────────────────────────
+    prior = st.session_state.get("prior_eval_records", "")
+    if prior and prior.strip():
+        _add_section_heading(doc, "Results from Previous Assessment Records:")
+        _add_body(doc, prior.strip())
+        _add_horizontal_rule(doc)
+
+    # ── ASSESSMENTS ───────────────────────────────────────────────────
+    _add_section_heading(doc, "Assessments:")
+
+    # ── WPPSI / WISC ──────────────────────────────────────────────────
+    if use_wppsi or use_wisc:
+        cog_label = "WPPSI-IV" if use_wppsi else "WISC-V"
+        _add_subheading(doc, cog_label)
+        if not cog_scores.get("obtained", True):
+            _add_body(doc, f"No composite score was obtained on the {cog_label}. "
+                           f"{cog_scores.get('reason','')}")
         else:
-            p = doc.add_paragraph(clean)
-            if p.runs: p.runs[0].font.size = Pt(11)
+            _add_body(doc, "Composite Score Summary", space_after=2)
+            _wppsi_wisc_table(doc, cog_label)
 
-    buf = io.BytesIO(); doc.save(buf); buf.seek(0)
+    # ── BASC-3 ────────────────────────────────────────────────────────
+    if use_basc and basc_data:
+        form_label = basc_data.get("form", "PRS")
+        _add_subheading(doc, f"Behavior Assessment System for Children, Third Edition (BASC-3) — {form_label}")
+        _add_body(doc, "Composite Score Summary", space_after=2)
+        _basc3_composite_table(doc)
+        _add_body(doc, "Scale Score Summary", space_after=2)
+        _basc3_scale_table(doc)
+
+        # Narrative paragraphs per domain
+        for section_label, t_key, adaptive in [
+            ("Externalizing Problems",    "ext_t",  False),
+            ("Internalizing Problems",    "int_t",  False),
+            ("Behavioral Symptoms Index", "bsi_t",  False),
+            ("Adaptive Skills",           "adp_t",  True),
+        ]:
+            t_val = basc_data.get(t_key, None)
+            if t_val is not None:
+                cls = t_classification(t_val, adaptive)
+                p = doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(4)
+                p.paragraph_format.space_after  = Pt(4)
+                label_run = p.add_run(f"{section_label}: ")
+                label_run.bold = True; label_run.font.size = Pt(11); label_run.font.name = "Times New Roman"
+                body_run = p.add_run(
+                    f"The {section_label} composite T score was {t_val}, which falls in the "
+                    f"{cls.lower()} range."
+                )
+                body_run.font.size = Pt(11); body_run.font.name = "Times New Roman"
+
+    # ── VINELAND-3 ────────────────────────────────────────────────────
+    if use_vineland and vineland_data:
+        _add_subheading(doc, "Vineland Adaptive Behavior Scales, Third Edition (Vineland-3)")
+        _add_body(doc, "ABC and Domain Score Summary", space_after=2)
+        _vineland_abc_table(doc)
+        _add_body(doc, "Qualitative Descriptors", space_after=2)
+        _vineland_qualitative_table(doc)
+
+        vin_narr = generate_vineland_narrative(
+            vineland_data["abc"], vineland_data["comm"],
+            vineland_data["daily"], vineland_data["social"],
+            vineland_data["comm_pct"], vineland_data["daily_pct"],
+            vineland_data["social_pct"],
+            patient_name,
+            vineland_data.get("respondent",""),
+            vineland_data.get("date_completed","")
+        )
+        if vin_narr:
+            for para_text in vin_narr.split("\n\n"):
+                if para_text.strip():
+                    _add_body(doc, para_text.strip())
+
+    # ── ADOS-2 ────────────────────────────────────────────────────────
+    if use_ados and ados_data:
+        _add_subheading(doc, "Autism Diagnostic Observation Schedule, Second Edition (ADOS-2)")
+        _add_body(doc, f"Module Administered: {ados_data.get('module','')}", space_after=2)
+        _ados2_domain_table(doc)
+
+        # ADOS-2 Classification
+        p_cls = doc.add_paragraph()
+        r_cls = p_cls.add_run("ADOS-2 Classification:")
+        r_cls.bold = True; r_cls.font.size = Pt(11); r_cls.font.name = "Times New Roman"
+
+        crit_a_lvl = ados_data.get("criteria_a_level", "")
+        crit_b_lvl = ados_data.get("criteria_b_level", "")
+        clas = ados_data.get("classification", "")
+        comp = ados_data.get("comparison", "")
+
+        for idx, line in enumerate([
+            f"1. ADOS-2 Classification: {clas}",
+            f"2. Criteria A (Social Communication): Level {crit_a_lvl}" if crit_a_lvl else "2. Criteria A (Social Communication): See table below",
+            f"3. Criteria B (Restricted & Repetitive): Level {crit_b_lvl}" if crit_b_lvl else "3. Criteria B (Restricted & Repetitive): See table below",
+        ], start=1):
+            np = doc.add_paragraph()
+            np.paragraph_format.space_before = Pt(2)
+            np.paragraph_format.space_after  = Pt(2)
+            nr = np.add_run(line)
+            nr.font.size = Pt(11); nr.font.name = "Times New Roman"
+
+        _add_body(doc, "ASD Severity Levels", space_before=6, space_after=2)
+        _asd_severity_table(doc)
+
+        # Criteria severity lines
+        if crit_a_lvl:
+            _add_body(doc, f"Criteria A Severity: Level {crit_a_lvl}")
+        if crit_b_lvl:
+            _add_body(doc, f"Criteria B Severity: Level {crit_b_lvl}")
+
+    _add_horizontal_rule(doc)
+
+    # ── CONCLUSION AND STATEMENT OF DIAGNOSIS (LLM) ───────────────────
+    _add_section_heading(doc, "Conclusion and Statement of Diagnosis:")
+    conc_text = _parse_llm_section(llm_output, "CONCLUSION AND STATEMENT OF DIAGNOSIS:")
+    if conc_text:
+        for para_text in conc_text.split("\n\n"):
+            if para_text.strip():
+                _add_body(doc, para_text.strip())
+    else:
+        _add_body(doc, "[Conclusion not available]")
+
+    _add_horizontal_rule(doc)
+
+    # ── RECOMMENDATIONS ───────────────────────────────────────────────
+    _add_section_heading(doc, "Recommendations:")
+    recs = build_recs_list()
+    for i, rec in enumerate(recs, start=1):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after  = Pt(2)
+        num_run = p.add_run(f"{i}. ")
+        num_run.bold = True; num_run.font.size = Pt(11); num_run.font.name = "Times New Roman"
+        body_run = p.add_run(rec)
+        body_run.font.size = Pt(11); body_run.font.name = "Times New Roman"
+
+    _add_horizontal_rule(doc)
+
+    # ── SIGNATURE BLOCK ───────────────────────────────────────────────
+    doc.add_paragraph()
+    sig_p1 = doc.add_paragraph()
+    sig_p1.paragraph_format.space_before = Pt(4)
+    sig_r1 = sig_p1.add_run(f"{examiner_name or '[Examiner Name]'}, Testing Technician / Psychology Intern")
+    sig_r1.font.size = Pt(11); sig_r1.font.name = "Times New Roman"
+
+    doc.add_paragraph()  # blank line for signature
+
+    sig_p2 = doc.add_paragraph()
+    sig_r2 = sig_p2.add_run(f"{supervisor_name or 'Gabrielle Kirby, Psy.D.'}, Licensed Psychologist, Supervisor")
+    sig_r2.font.size = Pt(11); sig_r2.font.name = "Times New Roman"
+
+    for line in [
+        f"NPI {supervisor_npi or '1598984932'}",
+        f"License # {supervisor_lic or '016934'}",
+        "contact@rimonhealth.com    347-746-6613",
+    ]:
+        sp = doc.add_paragraph()
+        sp.paragraph_format.space_before = Pt(0)
+        sp.paragraph_format.space_after  = Pt(0)
+        sr = sp.add_run(line)
+        sr.font.size = Pt(11); sr.font.name = "Times New Roman"
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
     return buf.read()
 
 if "report" in st.session_state:
@@ -1685,7 +2395,7 @@ if "report" in st.session_state:
         pdf_bytes = bytes(make_pdf(edited))
         st.download_button("Download PDF", pdf_bytes, fname+".pdf", "application/pdf", use_container_width=True)
     with col2:
-        docx_bytes = bytes(make_docx(edited))
+        docx_bytes = bytes(make_docx(st.session_state.get("llm_out", edited)))
         st.download_button("Download Word", docx_bytes, fname+".docx",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
     with col3:
