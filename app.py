@@ -269,6 +269,11 @@ BASC3_INTERP = {
                                 "demonstrates functional communication skills comparable to others of the same age."),
 }
 
+def strip_emdashes(text: str) -> str:
+    """Replace em dashes with a comma. Handles unicode and HTML variants."""
+    return text.replace("—", ",").replace("&mdash;", ",").replace("&#8212;", ",").replace("—", ",")
+
+
 def generate_basc3_narrative(data, patient_name, respondent_name):
     """
     Generate the BASC-3 section narrative programmatically.
@@ -717,7 +722,7 @@ Recording transcript: {t}"""
                                 messages=[{"role":"user","content":polish_prompt}],
                                 temperature=0.2, max_tokens=2048,
                             )
-                            clinical_text = resp.choices[0].message.content.strip()
+                            clinical_text = strip_emdashes(resp.choices[0].message.content.strip())
                             st.session_state["transcript"] = clinical_text
                             st.session_state["transcript_mode"] = "clinical"
                             st.success("Converted to clinical language.")
@@ -755,7 +760,7 @@ Recording transcript: {t}"""
                                 messages=[{"role":"user","content":polish_prompt}],
                                 temperature=0.2, max_tokens=2048,
                             )
-                            clinical_text = resp.choices[0].message.content.strip()
+                            clinical_text = strip_emdashes(resp.choices[0].message.content.strip())
                             st.session_state["transcript"] = clinical_text
                             st.session_state["transcript_mode"] = "clinical"
                             st.success("Done. Review below.")
@@ -1372,6 +1377,7 @@ No composite score was obtained on the {cog_label}. {cog_scores.get('reason','')
 
     return f"""You are a licensed clinical psychologist writing a formal Psychological Autism Spectrum Disorder Evaluation report.
 Match this EXACT style: third person, formal clinical language, patient referred to by first name throughout.
+IMPORTANT: Never use em dashes (—) anywhere in your response. Use commas, semicolons, or rewrite sentences instead.
 
 Write ONLY the following three sections. The other sections have already been generated.
 Use the name "{patient_name or '[PATIENT]'}" throughout.
@@ -1435,7 +1441,7 @@ def run_llm(prompt):
         temperature=0.25,
         max_tokens=4096,
     )
-    return resp.choices[0].message.content
+    return strip_emdashes(resp.choices[0].message.content)
 
 def assemble_full_report(llm_output):
     """Combine rule-based sections + LLM sections into final report."""
@@ -2292,7 +2298,7 @@ def make_docx(llm_output):
     # ── BASC-3 ────────────────────────────────────────────────────────
     if use_basc and basc_data:
         form_label = basc_data.get("form", "PRS")
-        _add_subheading(doc, f"Behavior Assessment System for Children, Third Edition (BASC-3) — {form_label}")
+        _add_subheading(doc, f"Behavior Assessment System for Children, Third Edition (BASC-3), {form_label}")
         _add_body(doc, "Composite Score Summary", space_after=2)
         _basc3_composite_table(doc)
         _add_body(doc, "Scale Score Summary", space_after=2)
