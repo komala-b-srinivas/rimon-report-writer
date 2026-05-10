@@ -431,13 +431,6 @@ def extract_obs_from_image(image_bytes):
 
 st.markdown("""
 <style>
-/* ── Global ── */
-html, body, [class*="css"] {
-    font-family: 'Inter', 'Segoe UI', sans-serif;
-    background-color: #f7f9fc;
-    color: #1a1a2e;
-}
-
 /* ── Hide Streamlit chrome ── */
 #MainMenu, footer, header { visibility: hidden; }
 
@@ -449,67 +442,39 @@ html, body, [class*="css"] {
 
 /* ── Top header bar ── */
 .rh-header {
-    background: #ffffff;
-    border-bottom: 3px solid #4BAEE8;
-    padding: 18px 32px;
+    background: #4BAEE8;
+    padding: 16px 28px;
     display: flex;
     align-items: center;
-    gap: 20px;
-    margin-bottom: 28px;
+    gap: 16px;
+    margin-bottom: 24px;
     border-radius: 0 0 12px 12px;
-    box-shadow: 0 2px 12px rgba(75,174,232,0.10);
 }
-.rh-header img { height: 56px; }
+.rh-header img { height: 48px; background: white; border-radius: 8px; padding: 4px; }
 .rh-header-text h1 {
     margin: 0;
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 700;
-    color: #1a1a2e;
+    color: #ffffff;
     letter-spacing: -0.3px;
 }
 .rh-header-text p {
     margin: 2px 0 0;
-    font-size: 13px;
-    color: #4BAEE8;
-    font-weight: 500;
+    font-size: 12px;
+    color: rgba(255,255,255,0.8);
+    font-weight: 400;
 }
 .rh-badge {
     margin-left: auto;
-    background: #eef7fd;
-    color: #4BAEE8;
-    border: 1px solid #4BAEE8;
+    background: rgba(255,255,255,0.2);
+    color: #ffffff;
+    border: 1px solid rgba(255,255,255,0.4);
     border-radius: 20px;
     padding: 4px 14px;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.05em;
-}
-
-/* ── Section headers ── */
-h2, h3 { color: #1a1a2e !important; font-weight: 700 !important; }
-
-/* ── Subheader pill ── */
-.stSubheader {
-    background: linear-gradient(90deg, #eef7fd, #f7f9fc);
-    border-left: 4px solid #4BAEE8;
-    padding: 10px 16px !important;
-    border-radius: 0 8px 8px 0;
-    margin-bottom: 16px !important;
-}
-
-/* ── Input fields ── */
-.stTextInput > div > div > input,
-.stTextArea > div > div > textarea,
-.stSelectbox > div > div {
-    border: 1px solid #d0e8f7 !important;
-    border-radius: 8px !important;
-    background: #ffffff !important;
-    font-size: 14px !important;
-}
-.stTextInput > div > div > input:focus,
-.stTextArea > div > div > textarea:focus {
-    border-color: #4BAEE8 !important;
-    box-shadow: 0 0 0 3px rgba(75,174,232,0.15) !important;
+    white-space: nowrap;
 }
 
 /* ── Buttons ── */
@@ -531,57 +496,27 @@ h2, h3 { color: #1a1a2e !important; font-weight: 700 !important; }
 
 /* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] {
-    background: #eef7fd;
-    border-radius: 10px;
-    padding: 4px;
     gap: 4px;
+    flex-wrap: wrap;
 }
 .stTabs [data-baseweb="tab"] {
     border-radius: 8px !important;
     font-weight: 500 !important;
     font-size: 13px !important;
-    color: #4BAEE8 !important;
+    white-space: nowrap !important;
+    padding: 8px 16px !important;
 }
 .stTabs [aria-selected="true"] {
     background: #4BAEE8 !important;
     color: white !important;
 }
 
-/* ── Cards (expanders) ── */
-.streamlit-expanderHeader {
-    background: #f0f8fe !important;
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    color: #1a1a2e !important;
-}
-.streamlit-expanderContent {
-    border: 1px solid #d0e8f7 !important;
-    border-top: none !important;
-    border-radius: 0 0 8px 8px !important;
-    background: #ffffff !important;
-}
-
-/* ── Info / success / error boxes ── */
-.stAlert {
-    border-radius: 8px !important;
-    font-size: 13px !important;
-}
-
-/* ── Divider ── */
-hr { border-color: #d0e8f7 !important; margin: 28px 0 !important; }
-
-/* ── Checkbox ── */
-.stCheckbox > label { font-size: 14px !important; color: #1a1a2e !important; }
-
 /* ── Download buttons ── */
 .stDownloadButton > button {
-    background: #1a1a2e !important;
+    background: #2a8fd4 !important;
     color: white !important;
     border-radius: 8px !important;
     font-weight: 600 !important;
-}
-.stDownloadButton > button:hover {
-    background: #2d2d4e !important;
 }
 
 /* ── Spinner ── */
@@ -658,43 +593,51 @@ st.divider()
 st.subheader("Background Information")
 _bg = st.session_state.get("extracted_bg", {})
 
-bg_auto, bg_manual = st.tabs([
-    "🎙️  Extract from Session Recording / Transcript  ← start here",
-    "✏️  Manual Entry"
-])
+# ── Record or upload session audio to auto-fill background fields ──
+with st.expander("Record or Upload Session Audio to Auto-Fill Fields", expanded=False):
+    st.caption("Record or upload the intake session. AI will transcribe it and extract all background fields automatically.")
+    bg_input_mode = st.radio("Input method", ["Record in-app", "Upload audio file", "Paste transcript"], horizontal=True, key="bg_input_mode")
 
-with bg_auto:
-    st.markdown("Upload the intake/background session recording or paste the transcript. AI fills all fields below.")
-    audio_mode = st.radio("Input", ["Upload audio file","Paste transcript"], horizontal=True)
-    if audio_mode == "Upload audio file":
-        af = st.file_uploader("Session recording", type=["mp3","mp4","m4a","wav","webm"])
-        if af:
-            st.audio(af)
-            if st.button("Transcribe Audio", type="primary"):
-                with st.spinner("Transcribing..."):
-                    try:
-                        t = transcribe_audio(af.read(), af.name)
-                        st.session_state["transcript"] = t
-                        st.success("Done. See transcript below.")
-                    except Exception as e:
-                        st.error(f"Transcription failed: {e}")
-        if "transcript" in st.session_state:
-            with st.expander("View transcript"): st.text_area("", st.session_state["transcript"], height=180, disabled=True)
+    if bg_input_mode == "Record in-app":
+        bg_mic = st.audio_input("Record session", key="bg_mic")
+        if bg_mic and st.button("Transcribe Recording", type="primary", key="bg_mic_btn"):
+            with st.spinner("Transcribing..."):
+                try:
+                    t = transcribe_audio(bg_mic.read(), "session.wav")
+                    st.session_state["transcript"] = t
+                    st.success("Transcribed. Click Extract below.")
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+
+    elif bg_input_mode == "Upload audio file":
+        af = st.file_uploader("Session recording", type=["mp3","mp4","m4a","wav","webm"], key="bg_upload")
+        if af and st.button("Transcribe", type="primary", key="bg_upload_btn"):
+            with st.spinner("Transcribing..."):
+                try:
+                    t = transcribe_audio(af.read(), af.name)
+                    st.session_state["transcript"] = t
+                    st.success("Transcribed. Click Extract below.")
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+
     else:
-        pasted = st.text_area("Paste transcript", value=st.session_state.get("transcript",""), height=200)
+        pasted = st.text_area("Paste transcript", value=st.session_state.get("transcript",""), height=150, key="bg_paste")
         if pasted: st.session_state["transcript"] = pasted
 
-    if st.session_state.get("transcript") and st.button("Extract Background from Transcript", type="primary"):
-        with st.spinner("Extracting fields..."):
-            try:
-                ex = extract_background_from_transcript(st.session_state["transcript"])
-                st.session_state["extracted_bg"] = ex
-                _bg = ex
-                st.success("Extracted. Review in Manual Entry tab.")
-            except Exception as e:
-                st.error(f"Extraction failed: {e}")
+    if st.session_state.get("transcript"):
+        with st.expander("View transcript"):
+            st.text_area("", st.session_state["transcript"], height=150, disabled=True, key="bg_transcript_view")
+        if st.button("Extract Background Fields from Transcript", type="primary", key="bg_extract_btn"):
+            with st.spinner("Extracting fields..."):
+                try:
+                    ex = extract_background_from_transcript(st.session_state["transcript"])
+                    st.session_state["extracted_bg"] = ex
+                    _bg = ex
+                    st.success("Done. Fields filled below - review and edit as needed.")
+                except Exception as e:
+                    st.error(f"Extraction failed: {e}")
 
-with bg_manual:
+with st.container():
     st.caption("Pre-filled from transcript if extracted. Edit anything needed.")
 
     # Prior evaluations
@@ -785,52 +728,36 @@ st.divider()
 # BLOCK 5 - BEHAVIORAL OBSERVATIONS
 # ══════════════════════════════════════════════════════════════════════
 st.subheader("Behavioral Observations")
-obs_mic, obs_photo, obs_type = st.tabs([
-    "🎙️  Record Observations (In-App)  ← easiest",
-    "📷  Upload Photo of Notes",
-    "✏️  Type Manually"
-])
+obs_mic, obs_upload, obs_type = st.tabs(["Record", "Upload Notes", "Type"])
 
 with obs_mic:
-    st.markdown("Click the microphone and narrate your observations out loud. Tell the story: patient arrival, behaviors, parent conversation, anything you observed.")
-    mic_audio = st.audio_input("Record your observations")
+    st.caption("Narrate your observations out loud - patient arrival, behaviors, anything you observed. AI will transcribe it.")
+    mic_audio = st.audio_input("Record observations", key="obs_mic_input")
     if mic_audio:
-        if st.button("Transcribe and Convert to Clinical Language", type="primary", key="obs_mic_btn"):
-            with st.spinner("Transcribing and converting to clinical language..."):
+        if st.button("Transcribe", type="primary", key="obs_mic_btn"):
+            with st.spinner("Transcribing..."):
                 try:
                     raw_transcript = transcribe_audio(mic_audio.read(), "observations.wav")
-                    # Convert spoken notes to clinical narrative via LLM
-                    polish_prompt = f"""A clinician narrated the following behavioral observations out loud during a neuropsychological evaluation.
-Rewrite this into polished, formal clinical language suitable for a psychological evaluation report.
-Write in third person. Cover all details mentioned. Do not add information not present.
-Return only the clinical narrative paragraphs.
-
-Spoken notes: {raw_transcript}"""
-                    resp = client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[{"role":"user","content":polish_prompt}],
-                        temperature=0.2, max_tokens=1024,
-                    )
-                    obs_extracted = resp.choices[0].message.content.strip()
-                    st.session_state["observations"] = obs_extracted
-                    st.success("Done. Review in Type Manually tab.")
-                    st.text_area("Preview", obs_extracted, height=150, disabled=True)
+                    st.session_state["observations"] = raw_transcript
+                    st.success("Done. Review in Type tab.")
+                    st.text_area("Preview", raw_transcript, height=150, disabled=True, key="obs_mic_preview")
                 except Exception as e:
                     st.error(f"Failed: {e}")
 
-with obs_photo:
-    obs_img = st.file_uploader("Handwritten observation notes (JPG, PNG or PDF)", type=["jpg","jpeg","png","webp","pdf"], key="obs_upload")
+with obs_upload:
+    st.caption("Upload your notes as JPG, PNG, or PDF.")
+    obs_img = st.file_uploader("Upload notes", type=["jpg","jpeg","png","webp","pdf"], key="obs_upload", label_visibility="collapsed")
     if obs_img:
         raw = obs_img.read()
         img_bytes = pdf_to_image_bytes(raw) if obs_img.name.lower().endswith(".pdf") else raw
         st.image(img_bytes, use_container_width=True)
-        if st.button("Extract Observations from Photo", type="primary"):
-            with st.spinner("Reading handwriting..."):
+        if st.button("Extract from Notes", type="primary", key="obs_extract_btn"):
+            with st.spinner("Reading notes..."):
                 try:
                     obs_extracted = extract_obs_from_image(img_bytes)
                     st.session_state["observations"] = obs_extracted
-                    st.success("Done. Review in Type Manually tab.")
-                    st.text_area("Preview", obs_extracted, height=150, disabled=True)
+                    st.success("Done. Review in Type tab.")
+                    st.text_area("Preview", obs_extracted, height=150, disabled=True, key="obs_upload_preview")
                 except Exception as e:
                     st.error(f"Failed: {e}")
 
@@ -839,7 +766,7 @@ with obs_type:
         "Behavioral observations",
         value=st.session_state.get("observations",""),
         height=200,
-        placeholder="e.g. Patient arrived with mother. Minimal eye contact. Echolalic speech noted (counting '1,2,3'). Did not respond to bids for joint attention. Stereotyped hand movements observed. Effort genuine; results valid estimate of current functioning.",
+        placeholder="e.g. Patient arrived with mother. Minimal eye contact. Echolalic speech noted. Did not respond to bids for joint attention. Effort genuine; results valid estimate of current functioning.",
     )
     st.session_state["observations"] = observations
 
@@ -853,11 +780,12 @@ if use_wppsi or use_wisc:
     cog_label = "WPPSI-IV" if use_wppsi else "WISC-V"
     st.subheader(f"Cognitive Assessment - {cog_label}")
 
-    cog_photo, cog_manual = st.tabs(["📷  Upload Score Sheet Photo", "✏️  Manual Entry"])
+    cog_photo, cog_manual = st.tabs(["Upload Score Sheet", "Manual Entry"])
     _cog = st.session_state.get("extracted_cog_scores", {})
 
     with cog_photo:
-        cog_img = st.file_uploader(f"{cog_label} score sheet (JPG, PNG or PDF)", type=["jpg","jpeg","png","webp","pdf"], key="cog_upload")
+        st.caption("Upload score sheet as JPG, PNG, or PDF.")
+        cog_img = st.file_uploader("Upload score sheet", type=["jpg","jpeg","png","webp","pdf"], key="cog_upload", label_visibility="collapsed")
         if cog_img:
             raw = cog_img.read()
             img_bytes = pdf_to_image_bytes(raw) if cog_img.name.lower().endswith(".pdf") else raw
