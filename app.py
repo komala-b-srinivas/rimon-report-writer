@@ -688,21 +688,24 @@ with st.expander("Record or Upload Session Audio to Auto-Fill Fields", expanded=
     if bg_input_mode == "Record in-app":
         bg_mic = st.audio_input("Record session", key="bg_mic")
         if bg_mic:
+            # Read bytes once and reuse
+            audio_bytes = bg_mic.read()
             col_a, col_b = st.columns(2)
             with col_a:
                 if st.button("Transcribe", type="primary", key="bg_mic_btn"):
                     with st.spinner("Transcribing..."):
                         try:
-                            t = transcribe_audio(bg_mic.read(), "session.wav")
+                            t = transcribe_audio(audio_bytes, "session.wav")
                             st.session_state["transcript"] = t
-                            st.success("Transcribed. Click Extract below.")
+                            st.session_state["transcript_mode"] = "raw"
+                            st.success("Transcribed.")
                         except Exception as e:
                             st.error(f"Failed: {e}")
             with col_b:
                 if st.button("Transcribe + Convert to Clinical Language", key="bg_mic_clinical_btn"):
                     with st.spinner("Transcribing and converting..."):
                         try:
-                            t = transcribe_audio(bg_mic.read(), "session.wav")
+                            t = transcribe_audio(audio_bytes, "session.wav")
                             polish_prompt = f"""A clinician recorded the following background intake session with a patient's family.
 Rewrite this into formal clinical language suitable for the Background Information section of a psychological evaluation report.
 Write in third person. Cover all details mentioned. Do not add information not present.
@@ -716,20 +719,23 @@ Recording transcript: {t}"""
                             )
                             clinical_text = resp.choices[0].message.content.strip()
                             st.session_state["transcript"] = clinical_text
-                            st.success("Done. Review below.")
+                            st.session_state["transcript_mode"] = "clinical"
+                            st.success("Converted to clinical language.")
                         except Exception as e:
                             st.error(f"Failed: {e}")
 
     elif bg_input_mode == "Upload audio file":
         af = st.file_uploader("Session recording", type=["mp3","mp4","m4a","wav","webm"], key="bg_upload")
         if af:
+            af_bytes = af.read()  # Read once, reuse in both buttons
             col_a, col_b = st.columns(2)
             with col_a:
                 if st.button("Transcribe", type="primary", key="bg_upload_btn"):
                     with st.spinner("Transcribing..."):
                         try:
-                            t = transcribe_audio(af.read(), af.name)
+                            t = transcribe_audio(af_bytes, af.name)
                             st.session_state["transcript"] = t
+                            st.session_state["transcript_mode"] = "raw"
                             st.success("Transcribed. Click Extract below.")
                         except Exception as e:
                             st.error(f"Failed: {e}")
@@ -737,7 +743,7 @@ Recording transcript: {t}"""
                 if st.button("Transcribe + Convert to Clinical Language", key="bg_upload_clinical_btn"):
                     with st.spinner("Transcribing and converting..."):
                         try:
-                            t = transcribe_audio(af.read(), af.name)
+                            t = transcribe_audio(af_bytes, af.name)
                             polish_prompt = f"""A clinician recorded the following background intake session with a patient's family.
 Rewrite this into formal clinical language suitable for the Background Information section of a psychological evaluation report.
 Write in third person. Cover all details mentioned. Do not add information not present.
@@ -751,6 +757,7 @@ Recording transcript: {t}"""
                             )
                             clinical_text = resp.choices[0].message.content.strip()
                             st.session_state["transcript"] = clinical_text
+                            st.session_state["transcript_mode"] = "clinical"
                             st.success("Done. Review below.")
                         except Exception as e:
                             st.error(f"Failed: {e}")
@@ -760,8 +767,8 @@ Recording transcript: {t}"""
         if pasted: st.session_state["transcript"] = pasted
 
     if st.session_state.get("transcript"):
-        with st.expander("View transcript"):
-            st.text_area("", st.session_state["transcript"], height=150, disabled=True, key="bg_transcript_view")
+        mode_label = "✅ Clinical Language" if st.session_state.get("transcript_mode") == "clinical" else "📄 Transcript"
+        st.text_area(f"{mode_label}", value=st.session_state["transcript"], height=180, key="bg_transcript_view")
         if st.button("Extract Background Fields from Transcript", type="primary", key="bg_extract_btn"):
             with st.spinner("Extracting fields..."):
                 try:
