@@ -12,6 +12,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 import os, json, base64, io, smtplib, subprocess, tempfile
+import fitz  # pymupdf
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
@@ -378,6 +379,13 @@ TRANSCRIPT: {transcript[:6000]}"""
         raw = raw.split("```")[1]
         if raw.startswith("json"): raw = raw[4:]
     return json.loads(raw.strip())
+
+def pdf_to_image_bytes(pdf_bytes):
+    """Convert first page of a PDF to JPEG bytes for vision model."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[0]
+    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+    return pix.tobytes("jpeg")
 
 def extract_scores_from_image(image_bytes, context="neuropsychological evaluation"):
     b64   = base64.b64encode(image_bytes).decode("utf-8")
@@ -777,18 +785,51 @@ st.divider()
 # BLOCK 5 - BEHAVIORAL OBSERVATIONS
 # ══════════════════════════════════════════════════════════════════════
 st.subheader("Behavioral Observations")
-obs_photo, obs_type = st.tabs(["📷  Upload Photo of Handwritten Notes  ← start here", "✏️  Type / Dictate"])
+obs_mic, obs_photo, obs_type = st.tabs([
+    "🎙️  Record Observations (In-App)  ← easiest",
+    "📷  Upload Photo of Notes",
+    "✏️  Type Manually"
+])
+
+with obs_mic:
+    st.markdown("Click the microphone and narrate your observations out loud. Tell the story: patient arrival, behaviors, parent conversation, anything you observed.")
+    mic_audio = st.audio_input("Record your observations")
+    if mic_audio:
+        if st.button("Transcribe and Convert to Clinical Language", type="primary", key="obs_mic_btn"):
+            with st.spinner("Transcribing and converting to clinical language..."):
+                try:
+                    raw_transcript = transcribe_audio(mic_audio.read(), "observations.wav")
+                    # Convert spoken notes to clinical narrative via LLM
+                    polish_prompt = f"""A clinician narrated the following behavioral observations out loud during a neuropsychological evaluation.
+Rewrite this into polished, formal clinical language suitable for a psychological evaluation report.
+Write in third person. Cover all details mentioned. Do not add information not present.
+Return only the clinical narrative paragraphs.
+
+Spoken notes: {raw_transcript}"""
+                    resp = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[{"role":"user","content":polish_prompt}],
+                        temperature=0.2, max_tokens=1024,
+                    )
+                    obs_extracted = resp.choices[0].message.content.strip()
+                    st.session_state["observations"] = obs_extracted
+                    st.success("Done. Review in Type Manually tab.")
+                    st.text_area("Preview", obs_extracted, height=150, disabled=True)
+                except Exception as e:
+                    st.error(f"Failed: {e}")
 
 with obs_photo:
-    obs_img = st.file_uploader("Handwritten observation notes", type=["jpg","jpeg","png","webp"], key="obs_upload")
+    obs_img = st.file_uploader("Handwritten observation notes (JPG, PNG or PDF)", type=["jpg","jpeg","png","webp","pdf"], key="obs_upload")
     if obs_img:
-        st.image(obs_img, use_container_width=True)
+        raw = obs_img.read()
+        img_bytes = pdf_to_image_bytes(raw) if obs_img.name.lower().endswith(".pdf") else raw
+        st.image(img_bytes, use_container_width=True)
         if st.button("Extract Observations from Photo", type="primary"):
             with st.spinner("Reading handwriting..."):
                 try:
-                    obs_extracted = extract_obs_from_image(obs_img.read())
+                    obs_extracted = extract_obs_from_image(img_bytes)
                     st.session_state["observations"] = obs_extracted
-                    st.success("Done. Review in Type tab.")
+                    st.success("Done. Review in Type Manually tab.")
                     st.text_area("Preview", obs_extracted, height=150, disabled=True)
                 except Exception as e:
                     st.error(f"Failed: {e}")
@@ -816,13 +857,15 @@ if use_wppsi or use_wisc:
     _cog = st.session_state.get("extracted_cog_scores", {})
 
     with cog_photo:
-        cog_img = st.file_uploader(f"{cog_label} score sheet", type=["jpg","jpeg","png","webp"], key="cog_upload")
+        cog_img = st.file_uploader(f"{cog_label} score sheet (JPG, PNG or PDF)", type=["jpg","jpeg","png","webp","pdf"], key="cog_upload")
         if cog_img:
-            st.image(cog_img, use_container_width=True)
+            raw = cog_img.read()
+            img_bytes = pdf_to_image_bytes(raw) if cog_img.name.lower().endswith(".pdf") else raw
+            st.image(img_bytes, use_container_width=True)
             if st.button(f"Extract {cog_label} Scores", type="primary"):
                 with st.spinner("Reading score sheet..."):
                     try:
-                        r = extract_scores_from_image(cog_img.read(), cog_label)
+                        r = extract_scores_from_image(img_bytes, cog_label)
                         st.session_state["extracted_cog_scores"] = r.get("scores",{})
                         _cog = st.session_state["extracted_cog_scores"]
                         st.success("Scores extracted. Review in Manual Entry tab.")
@@ -1388,6 +1431,8 @@ Evaluation Materials:
 
 Assessments:
 
+[[SCORES_TABLE]]
+
 {cog_text}
 
 {"─" * 40 if cog_text else ""}
@@ -1399,7 +1444,7 @@ Assessments:
 
 {"─" * 40 if vin_text else ""}
 
-{"Vineland Adaptive Behavior Scales, Third Edition (Vineland™-3)" if use_vineland else ""}
+{"Vineland Adaptive Behavior Scales, Third Edition (Vineland-3)" if use_vineland else ""}
 {"Domain-Level Parent/Caregiver Form Report" if use_vineland else ""}
 
 {vin_text}
@@ -1486,9 +1531,48 @@ def make_pdf(report_text):
     pdf.write(5,"DRAFT - FOR CLINICIAN REVIEW AND SIGNATURE ONLY. Not for distribution without authorized sign-off.")
     return pdf.output()
 
+def add_score_table(doc, headers, rows, accent_color="4BAEE8"):
+    """Add a formatted score table to a Word document."""
+    from docx.oxml.ns import qn as _qn
+    from docx.oxml import OxmlElement as _OE
+    table = doc.add_table(rows=1+len(rows), cols=len(headers))
+    table.style = "Table Grid"
+    # Header row
+    hdr_row = table.rows[0]
+    for i, h in enumerate(headers):
+        cell = hdr_row.cells[i]
+        cell.text = h
+        run = cell.paragraphs[0].runs[0]
+        run.bold = True
+        run.font.size = Pt(10)
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        # Blue background
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd = _OE("w:shd")
+        shd.set(_qn("w:val"), "clear")
+        shd.set(_qn("w:color"), "auto")
+        shd.set(_qn("w:fill"), accent_color)
+        tcPr.append(shd)
+    # Data rows
+    for ri, row_data in enumerate(rows):
+        row = table.rows[ri+1]
+        for ci, val in enumerate(row_data):
+            cell = row.cells[ci]
+            cell.text = str(val)
+            cell.paragraphs[0].runs[0].font.size = Pt(10)
+            if ri % 2 == 0:
+                tc = cell._tc
+                tcPr = tc.get_or_add_tcPr()
+                shd = _OE("w:shd")
+                shd.set(_qn("w:val"), "clear")
+                shd.set(_qn("w:color"), "auto")
+                shd.set(_qn("w:fill"), "EEF7FD")
+                tcPr.append(shd)
+    doc.add_paragraph()
+
 def make_docx(report_text):
     doc = Document()
-    # Page margins
     for sec in doc.sections:
         sec.top_margin    = Inches(1)
         sec.bottom_margin = Inches(1)
@@ -1506,8 +1590,53 @@ def make_docx(report_text):
         is_draft = clean.startswith("***")
         is_title = clean.startswith("Psychological Autism") or clean.startswith("Privileged")
         is_hdr   = (clean.isupper() and 6 < len(clean) < 100)
+        is_scores_marker = clean.startswith("[[SCORES_TABLE]]")
 
-        if is_draft:
+        if is_scores_marker:
+            # Insert score tables
+            if (use_wppsi or use_wisc) and cog_scores.get("obtained", True):
+                cog_label = "WPPSI-IV" if use_wppsi else "WISC-V"
+                p = doc.add_heading(f"{cog_label} - Composite Score Summary", level=3)
+                rows = []
+                for k, v in cog_scores.items():
+                    if k in ("obtained","reason"): continue
+                    pct = ss_to_pct(v)
+                    cls = "Low" if v < 70 else "Borderline" if v < 80 else "Low Average" if v < 90 else "Average" if v < 110 else "High Average"
+                    rows.append([k, str(v), f"{pct}th", cls])
+                add_score_table(doc, ["Index", "Standard Score", "Percentile", "Classification"], rows)
+
+            if use_basc and basc_data:
+                doc.add_heading("BASC-3 PRS - Composite Summary", level=3)
+                composites = [
+                    ("Externalizing Problems", basc_data.get("ext_t",""), basc_data.get("ext_pct","")),
+                    ("Internalizing Problems", basc_data.get("int_t",""), basc_data.get("int_pct","")),
+                    ("Behavioral Symptoms Index", basc_data.get("bsi_t",""), basc_data.get("bsi_pct","")),
+                    ("Adaptive Skills", basc_data.get("adp_t",""), basc_data.get("adp_pct","")),
+                ]
+                rows = [[c[0], str(c[1]), f"{c[2]}th", t_classification(c[1]) if isinstance(c[1], (int,float)) else ""] for c in composites]
+                add_score_table(doc, ["Composite", "T Score", "Percentile", "Classification"], rows)
+
+            if use_vineland and vineland_data:
+                doc.add_heading("Vineland-3 - Domain Score Summary", level=3)
+                rows = [
+                    ["Adaptive Behavior Composite (ABC)", str(vineland_data["abc"]), f"{ss_to_pct(vineland_data['abc'])}th", ss_adaptive_level(vineland_data["abc"])],
+                    ["Communication", str(vineland_data["comm"]), f"{vineland_data['comm_pct']}th", ss_adaptive_level(vineland_data["comm"])],
+                    ["Daily Living Skills", str(vineland_data["daily"]), f"{vineland_data['daily_pct']}th", ss_adaptive_level(vineland_data["daily"])],
+                    ["Socialization", str(vineland_data["social"]), f"{vineland_data['social_pct']}th", ss_adaptive_level(vineland_data["social"])],
+                ]
+                add_score_table(doc, ["Domain", "Standard Score", "Percentile", "Adaptive Level"], rows)
+
+            if use_ados and ados_data:
+                doc.add_heading("ADOS-2 - Score Summary", level=3)
+                combined = ados_data["sa"] + ados_data["rrb"]
+                rows = [
+                    ["Social Affect (SA)", str(ados_data["sa"]), ados_sa_label(ados_data["module"], ados_data["sa"])],
+                    ["Restricted & Repetitive Behavior (RRB)", str(ados_data["rrb"]), ados_rrb_label(ados_data["rrb"])],
+                    ["Combined Total (SA + RRB)", str(combined), ados_data["classification"]],
+                    ["Comparison Score", str(ados_data["comparison"]), comparison_score_label(ados_data["comparison"])],
+                ]
+                add_score_table(doc, ["Score Area", "Score", "Classification"], rows)
+        elif is_draft:
             p = doc.add_paragraph()
             r = p.add_run(clean)
             r.bold = True; r.italic = True
