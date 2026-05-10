@@ -34,22 +34,107 @@ def check_password():
     if not st.session_state.authenticated:
         st.markdown("""
         <style>
-        .login-box {
-            max-width: 420px; margin: 80px auto 0; background: white;
-            border-radius: 16px; padding: 48px 40px;
-            box-shadow: 0 8px 32px rgba(75,174,232,0.15);
-            border-top: 4px solid #4BAEE8; text-align: center;
+        /* Full page gradient background */
+        .stApp {
+            background: linear-gradient(135deg, #1B3A6B 0%, #2a6fa8 50%, #4BAEE8 100%) !important;
+            min-height: 100vh;
         }
-        .login-box img { height: 72px; margin-bottom: 20px; }
-        .login-box h2 { font-size: 20px; font-weight: 700; color: #1a1a2e; margin: 0 0 6px; }
-        .login-box p { font-size: 13px; color: #6b7280; margin: 0 0 28px; }
+        #MainMenu, footer, header { visibility: hidden; }
+        .block-container { padding-top: 60px !important; max-width: 480px !important; }
+
+        /* Card */
+        .login-card {
+            background: rgba(255,255,255,0.07);
+            border: 1px solid rgba(255,255,255,0.15);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 48px 40px 32px;
+            text-align: center;
+            margin-bottom: 0;
+        }
+        .login-card img {
+            height: 80px;
+            background: white;
+            border-radius: 12px;
+            padding: 8px 12px;
+            margin-bottom: 24px;
+        }
+        .login-card h1 {
+            color: #ffffff !important;
+            font-size: 26px !important;
+            font-weight: 700 !important;
+            margin: 0 0 8px !important;
+            letter-spacing: -0.5px;
+        }
+        .login-card p {
+            color: rgba(255,255,255,0.65) !important;
+            font-size: 14px !important;
+            margin: 0 0 32px !important;
+        }
+        .login-card .divider {
+            width: 40px; height: 3px;
+            background: #4BAEE8;
+            border-radius: 2px;
+            margin: 0 auto 32px;
+        }
+
+        /* Input override for login */
+        .stTextInput > div > div > input {
+            background: rgba(255,255,255,0.1) !important;
+            border: 1px solid rgba(255,255,255,0.25) !important;
+            border-radius: 10px !important;
+            color: white !important;
+            font-size: 15px !important;
+            padding: 14px 16px !important;
+        }
+        .stTextInput > div > div > input::placeholder { color: rgba(255,255,255,0.4) !important; }
+        .stTextInput > div > div > input:focus {
+            border-color: #4BAEE8 !important;
+            box-shadow: 0 0 0 3px rgba(75,174,232,0.3) !important;
+        }
+
+        /* Login button */
+        .stButton > button {
+            background: #4BAEE8 !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 10px !important;
+            font-weight: 700 !important;
+            font-size: 15px !important;
+            padding: 14px !important;
+            width: 100% !important;
+            letter-spacing: 0.3px;
+            margin-top: 8px !important;
+            transition: all 0.2s ease !important;
+        }
+        .stButton > button:hover {
+            background: #2a8fd4 !important;
+            transform: translateY(-1px) !important;
+            box-shadow: 0 6px 20px rgba(75,174,232,0.4) !important;
+        }
+
+        /* Error box */
+        .stAlert { border-radius: 10px !important; margin-top: 12px !important; }
+
+        /* Footer text */
+        .login-footer {
+            text-align: center;
+            color: rgba(255,255,255,0.3);
+            font-size: 11px;
+            margin-top: 32px;
+            letter-spacing: 0.05em;
+        }
         </style>
-        <div class="login-box">
+
+        <div class="login-card">
             <img src="https://static.wixstatic.com/media/022991_02a105832a4745979b94f16debb093a8~mv2.png" />
-            <h2>Report Writer</h2>
+            <h1>Report Writer</h1>
+            <div class="divider"></div>
             <p>Enter your access password to continue</p>
         </div>
         """, unsafe_allow_html=True)
+
         pw = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Enter password")
         if st.button("Login", use_container_width=True):
             correct = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", ""))
@@ -57,7 +142,9 @@ def check_password():
                 st.session_state.authenticated = True
                 st.rerun()
             else:
-                st.error("Incorrect password.")
+                st.error("Incorrect password. Please try again.")
+
+        st.markdown('<div class="login-footer">RIMON HEALTH - INTERNAL USE ONLY</div>', unsafe_allow_html=True)
         st.stop()
 
 check_password()
