@@ -1063,10 +1063,10 @@ if use_basc:
             extracted_ci_lo= _basc.get(f"{label} CI lo")
             extracted_ci_hi= _basc.get(f"{label} CI hi")
             extracted_pct  = _basc.get(f"{label} pct")
-            use_t    = int(extracted_t)    if extracted_t    is not None else default_t
-            use_pct  = int(extracted_pct)  if extracted_pct  is not None else default_pct
-            use_ci_lo= int(extracted_ci_lo)if extracted_ci_lo is not None else max(20, use_t - 4)
-            use_ci_hi= int(extracted_ci_hi)if extracted_ci_hi is not None else min(100, use_t + 4)
+            use_t    = int(extracted_t)    if extracted_t    not in (None, 0) else default_t
+            use_pct  = int(extracted_pct)  if extracted_pct  is not None     else default_pct
+            use_ci_lo= int(extracted_ci_lo)if extracted_ci_lo not in (None, 0) else max(20, use_t - 4)
+            use_ci_hi= int(extracted_ci_hi)if extracted_ci_hi not in (None, 0) else min(100, use_t + 4)
             c1,c2,c3,c4 = st.columns([2,1,1,1])
             c1.markdown(f"**{label}**")
             t    = c2.number_input("T",      20, 100, max(20, use_t),    key=f"{key_prefix}_t")
@@ -1082,8 +1082,8 @@ if use_basc:
                 default_t = 45 if adaptive else 55
                 c1,c2,c3 = st.columns([3,1,1])
                 c1.write(s)
-                t   = c2.number_input("T", 20, 100, int(_basc.get(f"{s} T", default_t)), key=f"{key}_t")
-                pct = c3.number_input("%ile", 0, 99, int(_basc.get(f"{s} pct", 50)),      key=f"{key}_pct")
+                t   = c2.number_input("T", 20, 100, int(_basc.get(f"{s} T") or default_t), key=f"{key}_t")
+                pct = c3.number_input("%ile", 0, 99, int(_basc.get(f"{s} pct") or 50),    key=f"{key}_pct")
                 data[f"{key}_t"]   = t
                 data[f"{key}_pct"] = pct
                 color = t_flag(t, adaptive)
