@@ -1044,9 +1044,63 @@ if use_basc:
                 with st.spinner("Reading BASC-3 scores..."):
                     try:
                         r = extract_scores_from_image(basc_img.read(), "BASC-3 Parent Rating Scales")
-                        st.session_state["extracted_basc_scores"] = r.get("scores",{})
-                        _basc = st.session_state["extracted_basc_scores"]
-                        st.success("Extracted. Review in Manual Entry.")
+                        scores = r.get("scores", {})
+                        st.session_state["extracted_basc_scores"] = scores
+
+                        # Map extracted keys → widget session state keys so number_inputs update
+                        _key_map = {
+                            "Externalizing Problems T":       "ext_t",
+                            "Externalizing Problems CI lo":   "ext_ci_lo",
+                            "Externalizing Problems CI hi":   "ext_ci_hi",
+                            "Externalizing Problems pct":     "ext_pct",
+                            "Internalizing Problems T":       "int_t",
+                            "Internalizing Problems CI lo":   "int_ci_lo",
+                            "Internalizing Problems CI hi":   "int_ci_hi",
+                            "Internalizing Problems pct":     "int_pct",
+                            "Behavioral Symptoms Index T":    "bsi_t",
+                            "Behavioral Symptoms Index CI lo":"bsi_ci_lo",
+                            "Behavioral Symptoms Index CI hi":"bsi_ci_hi",
+                            "Behavioral Symptoms Index pct":  "bsi_pct",
+                            "Adaptive Skills T":              "adp_t",
+                            "Adaptive Skills CI lo":          "adp_ci_lo",
+                            "Adaptive Skills CI hi":          "adp_ci_hi",
+                            "Adaptive Skills pct":            "adp_pct",
+                            "Hyperactivity T":                "hyperactivity_t",
+                            "Hyperactivity pct":              "hyperactivity_pct",
+                            "Aggression T":                   "aggression_t",
+                            "Aggression pct":                 "aggression_pct",
+                            "Conduct Problems T":             "conduct_problems_t",
+                            "Conduct Problems pct":           "conduct_problems_pct",
+                            "Anxiety T":                      "anxiety_t",
+                            "Anxiety pct":                    "anxiety_pct",
+                            "Depression T":                   "depression_t",
+                            "Depression pct":                 "depression_pct",
+                            "Somatization T":                 "somatization_t",
+                            "Somatization pct":               "somatization_pct",
+                            "Atypicality T":                  "atypicality_t",
+                            "Atypicality pct":                "atypicality_pct",
+                            "Withdrawal T":                   "withdrawal_t",
+                            "Withdrawal pct":                 "withdrawal_pct",
+                            "Attention Problems T":           "attention_problems_t",
+                            "Attention Problems pct":         "attention_problems_pct",
+                            "Adaptability T":                 "adaptability_t",
+                            "Adaptability pct":               "adaptability_pct",
+                            "Social Skills T":                "social_skills_t",
+                            "Social Skills pct":              "social_skills_pct",
+                            "Leadership T":                   "leadership_t",
+                            "Leadership pct":                 "leadership_pct",
+                            "Activities of Daily Living T":   "activities_of_daily_living_t",
+                            "Activities of Daily Living pct": "activities_of_daily_living_pct",
+                            "Functional Communication T":     "functional_communication_t",
+                            "Functional Communication pct":   "functional_communication_pct",
+                        }
+                        for extracted_key, widget_key in _key_map.items():
+                            val = scores.get(extracted_key)
+                            if val is not None:
+                                st.session_state[widget_key] = int(val)
+
+                        st.success("Extracted. Switching to Manual Entry tab to review.")
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Failed: {e}")
 
