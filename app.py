@@ -495,7 +495,50 @@ def extract_scores_from_image(image_bytes, context="neuropsychological evaluatio
     b64   = base64.b64encode(image_bytes).decode("utf-8")
     sig   = image_bytes[:4]
     mime  = "image/jpeg" if sig[:3]==b'\xff\xd8\xff' else ("image/png" if sig[:4]==b'\x89PNG' else "image/jpeg")
-    prompt = f"""You are reading a neuropsychological score sheet from a {context} evaluation.
+
+    if "BASC" in context:
+        prompt = """You are reading a BASC-3 Parent Rating Scales score report.
+Extract ALL composite and scale T scores and percentile ranks.
+Return ONLY valid JSON using EXACTLY these key names (use null if not visible):
+{
+  "test_battery": "BASC-3",
+  "scores": {
+    "Externalizing Problems T": number,
+    "Externalizing Problems CI lo": number,
+    "Externalizing Problems CI hi": number,
+    "Externalizing Problems pct": number,
+    "Internalizing Problems T": number,
+    "Internalizing Problems CI lo": number,
+    "Internalizing Problems CI hi": number,
+    "Internalizing Problems pct": number,
+    "Behavioral Symptoms Index T": number,
+    "Behavioral Symptoms Index CI lo": number,
+    "Behavioral Symptoms Index CI hi": number,
+    "Behavioral Symptoms Index pct": number,
+    "Adaptive Skills T": number,
+    "Adaptive Skills CI lo": number,
+    "Adaptive Skills CI hi": number,
+    "Adaptive Skills pct": number,
+    "Hyperactivity T": number, "Hyperactivity pct": number,
+    "Aggression T": number, "Aggression pct": number,
+    "Conduct Problems T": number, "Conduct Problems pct": number,
+    "Anxiety T": number, "Anxiety pct": number,
+    "Depression T": number, "Depression pct": number,
+    "Somatization T": number, "Somatization pct": number,
+    "Atypicality T": number, "Atypicality pct": number,
+    "Withdrawal T": number, "Withdrawal pct": number,
+    "Attention Problems T": number, "Attention Problems pct": number,
+    "Adaptability T": number, "Adaptability pct": number,
+    "Social Skills T": number, "Social Skills pct": number,
+    "Leadership T": number, "Leadership pct": number,
+    "Activities of Daily Living T": number, "Activities of Daily Living pct": number,
+    "Functional Communication T": number, "Functional Communication pct": number
+  },
+  "notes": "any issues"
+}
+Return ONLY JSON. Use null for any score not visible."""
+    else:
+        prompt = f"""You are reading a neuropsychological score sheet from a {context} evaluation.
 Extract ALL numerical scores visible. Return ONLY valid JSON:
 {{"test_battery": "name", "scores": {{"field name": number}}, "notes": "any issues"}}
 For T-scores label as "<scale> T". For standard scores label as "<index> SS" or just the index name.
@@ -1015,12 +1058,21 @@ if use_basc:
         st.caption("Get these from Q-Global printout or score report.")
 
         def composite_inputs(label, key_prefix, default_t=55, default_pct=50):
+            # Pull from extracted scores if available, fall back to defaults
+            extracted_t    = _basc.get(f"{label} T")
+            extracted_ci_lo= _basc.get(f"{label} CI lo")
+            extracted_ci_hi= _basc.get(f"{label} CI hi")
+            extracted_pct  = _basc.get(f"{label} pct")
+            use_t    = int(extracted_t)    if extracted_t    is not None else default_t
+            use_pct  = int(extracted_pct)  if extracted_pct  is not None else default_pct
+            use_ci_lo= int(extracted_ci_lo)if extracted_ci_lo is not None else max(20, use_t - 4)
+            use_ci_hi= int(extracted_ci_hi)if extracted_ci_hi is not None else min(100, use_t + 4)
             c1,c2,c3,c4 = st.columns([2,1,1,1])
             c1.markdown(f"**{label}**")
-            t    = c2.number_input(f"T", 20, 100, max(20, default_t),   key=f"{key_prefix}_t")
-            ci_lo= c3.number_input(f"CI lo", 20, 100, max(20, default_t-4), key=f"{key_prefix}_ci_lo")
-            ci_hi= c4.number_input(f"CI hi", 20, 100, max(20, min(100, default_t+4)), key=f"{key_prefix}_ci_hi")
-            pct  = st.number_input(f"Percentile ({label})", 0, 99, default_pct, key=f"{key_prefix}_pct")
+            t    = c2.number_input("T",      20, 100, max(20, use_t),    key=f"{key_prefix}_t")
+            ci_lo= c3.number_input("CI lo",  20, 100, max(20, use_ci_lo),key=f"{key_prefix}_ci_lo")
+            ci_hi= c4.number_input("CI hi",  20, 100, max(20, use_ci_hi),key=f"{key_prefix}_ci_hi")
+            pct  = st.number_input(f"Percentile ({label})", 0, 99, max(0, use_pct), key=f"{key_prefix}_pct")
             return t, ci_lo, ci_hi, pct
 
         def subscale_inputs(scales, adaptive=False):
