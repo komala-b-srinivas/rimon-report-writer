@@ -171,6 +171,18 @@ def ss_to_pct(ss):
             return round(SS_PCT[lo] + f * (SS_PCT[hi] - SS_PCT[lo]))
     return 50
 
+def ss_to_label(ss):
+    """Convert standard score to qualitative label (WPPSI/WISC scale)."""
+    ss = int(round(ss))
+    if ss >= 130: return "Very Superior"
+    if ss >= 120: return "Superior"
+    if ss >= 110: return "High Average"
+    if ss >= 90:  return "Average"
+    if ss >= 80:  return "Low Average"
+    if ss >= 70:  return "Borderline"
+    if ss >= 55:  return "Extremely Low"
+    return "Extremely Low"
+
 def ss_adaptive_level(ss):
     if ss >= 130: return "High"
     if ss >= 115: return "Moderately High"
@@ -1296,14 +1308,15 @@ def build_background_text():
     if services:
         lines.append(f"Prior/current services: {', '.join(services)}")
     lines.append(f"\nParent interview conducted on {interview_date}.")
-    lines.append(f"Family: {family_composition or 'Not specified'}")
+    if family_composition: lines.append(f"Family: {family_composition}")
     if family_hx: lines.append(f"Family history: {family_hx}")
-    lines.append(f"Communication: {comm_level}" + (f" - {echolalia_detail}" if echolalia and echolalia_detail else ""))
+    if comm_level: lines.append(f"Communication: {comm_level}" + (f" - {echolalia_detail}" if echolalia and echolalia_detail else ""))
     if not toilet_trained: lines.append("Not toilet trained - wears diapers.")
     if feeding_difficulties: lines.append(f"Feeding: {feeding_difficulties}")
     if behavioral_concerns: lines.append(f"Behavioral concerns: {behavioral_concerns}")
-    lines.append(f"School: {school_name or 'Not specified'} - Placement: {school_placement_type or grade_placement or 'Not specified'}")
-    lines.append(f"IEP: {iep_status}" + (f" - Classification: {cse_classification}" if cse_classification else ""))
+    if school_name or school_placement_type or grade_placement:
+        lines.append(f"School: {school_name or ''} - Placement: {school_placement_type or grade_placement or ''}".strip(" -"))
+    if iep_status: lines.append(f"IEP: {iep_status}" + (f" - Classification: {cse_classification}" if cse_classification else ""))
     if birth_complications: lines.append(f"Birth/prenatal: {birth_complications}")
     if medical_diagnoses:   lines.append(f"Medical: {medical_diagnoses}")
     if current_meds:        lines.append(f"Medications: {current_meds}")
@@ -1388,6 +1401,7 @@ Write a flowing clinical narrative (2-3 paragraphs) from these structured notes.
 First paragraph: prior evaluation history and results.
 Second paragraph: parent interview findings - family, communication, behaviors, school, services, diagnoses.
 Use formal language. Be specific. Include all details provided.
+CRITICAL: Never write "not specified", "not provided", "not available", or any similar phrase. If a detail is missing, simply omit it entirely. Only write about information that is explicitly present in the notes below.
 
 Background notes:
 {bg}
@@ -1403,24 +1417,18 @@ Clinician notes:
 
 ---
 SECTION TO WRITE 3 - CONCLUSION AND STATEMENT OF DIAGNOSIS:
-Based on all assessment data below, write the conclusion paragraph.
-State that DSM-5 criteria are met (or not). Cite specific tests. Name the diagnosis: {primary_dx}.
-{"Additional: " + additional_dx if additional_dx else ""}
+Write ONE concise paragraph using EXACTLY this opening structure:
+"Based upon several behavioral observations, Objective testing materials, Case Materials, and interviews with {patient_name or '[patient]'}{', his/her mother' if True else ''}{', Cognitive Composite Index results from the ' + ('WPPSI-IV' if use_wppsi else 'WISC-V') + ',' if (use_wppsi or use_wisc) else ''} and Adaptive Behavior inventories, it can be stated that {patient_name or '[patient]'} meets sufficient DSM-5 criteria for a Differential Diagnosis of Autism Spectrum Disorder (ASD); requiring support for both deficits in social communication, and possibly restricted and/or repetitive patterns of behavior."
 
-Assessment summary:
+Then in the same paragraph, briefly note any food/sensory/behavioral specifics that support ASD from the background.
+Do NOT include ICD-10 codes. Do NOT say "F84.0". Do NOT write multiple paragraphs.
+{"Additional diagnosis to mention: " + additional_dx if additional_dx else ""}
+
+Assessment data:
 {cog_section}
-
-BASC-3 key findings:
-  BSI composite T={basc_data.get('bsi_t','N/A')} (Clinically Significant if ≥70)
-  Atypicality T={basc_data.get('atypicality_t','N/A')}
-  Attention Problems T={basc_data.get('attention_problems_t','N/A')}
-  Adaptive Skills composite T={basc_data.get('adp_t','N/A')}
-  Functional Communication T={basc_data.get('functional_communication_t','N/A')}
-
-Vineland-3: ABC={vineland_data.get('abc','N/A')}, Comm={vineland_data.get('comm','N/A')}, DLS={vineland_data.get('daily','N/A')}, Social={vineland_data.get('social','N/A')}
-
-ADOS-2: SA={ados_data.get('sa','N/A')}, RRB={ados_data.get('rrb','N/A')}, Combined={ados_data.get('combined','N/A')}, Classification={ados_data.get('classification','N/A')}
-Criteria A Level {ados_data.get('criteria_a_level','N/A')}, Criteria B Level {ados_data.get('criteria_b_level','N/A')}
+BASC-3: BSI T={basc_data.get('bsi_t','N/A')}, Adaptive Skills T={basc_data.get('adp_t','N/A')}
+Vineland-3: ABC={vineland_data.get('abc','N/A') if vineland_data else 'N/A'}
+ADOS-2: Classification={ados_data.get('classification','N/A') if ados_data else 'N/A'}, Combined={ados_data.get('combined','N/A') if ados_data else 'N/A'}
 
 ---
 Return ONLY the three sections with these exact headers:
@@ -2229,10 +2237,12 @@ def make_docx(llm_output):
 
     # ── REASON FOR REFERRAL ───────────────────────────────────────────
     _add_section_heading(doc, "Reason for Referral:")
+    ref_by = referral_by.lower() if referral_by else "his/her parent/guardian"
     ref_text = (
-        f"{patient_name or 'The patient'} was referred to the examiner for a psychological evaluation "
-        f"by {referral_by.lower() if referral_by else 'a referring party'}. "
-        f"{referral_concern or ''}"
+        f"{patient_name or 'The patient'} was referred to the examiner for an initial neuropsychological "
+        f"evaluation by {ref_by} due to {referral_concern or 'possible developmental issues and/or Autism Spectrum Disorder (ASD) symptoms'}. "
+        f"The purpose of this evaluation is to assess if {patient_name or 'the patient'} is on the Autism Spectrum "
+        f"and next steps based upon evaluation findings."
     )
     _add_body(doc, ref_text)
 
@@ -2286,50 +2296,157 @@ def make_docx(llm_output):
 
     # ── WPPSI / WISC ──────────────────────────────────────────────────
     if use_wppsi or use_wisc:
-        cog_label = "WPPSI-IV" if use_wppsi else "WISC-V"
-        _add_subheading(doc, cog_label)
+        cog_label    = "WPPSI-IV" if use_wppsi else "WISC-V"
+        cog_fullname = ("Wechsler Preschool Primary Scale of Intelligence - Fourth Edition (WPPSI-IV)"
+                        if use_wppsi else
+                        "Wechsler Intelligence Scale for Children - Fifth Edition (WISC-V)")
+        _add_subheading(doc, cog_fullname)
         if not cog_scores.get("obtained", True):
             _add_body(doc, f"No composite score was obtained on the {cog_label}. "
                            f"{cog_scores.get('reason','')}")
         else:
+            # Opening sentence
+            _add_body(doc, f"{patient_name or 'The patient'} was administered certain subtests of cognitive "
+                           f"ability from the {cog_fullname}. "
+                           f"{patient_name or 'The patient'} received a Full-Scale Score that fell within the "
+                           f"{ss_to_label(cog_scores.get('FSIQ', cog_scores.get('Full Scale IQ', 100)))} range of ability.")
+
+            # Per-index narrative paragraphs
+            index_info = {
+                "VCI":  ("Verbal Comprehension Index (VCI)",
+                         "a broad ability for the individual to access and apply acquired knowledge, "
+                         "including lexical knowledge, language development, and verbal concept formation"),
+                "VSI":  ("Visual Spatial Index (VSI)",
+                         "the ability to evaluate visual details and patterns and understand visual spatial relationships"),
+                "FRI":  ("Fluid Reasoning Index (FRI)",
+                         "the ability to detect and apply underlying conceptual relationships among visual stimuli"),
+                "WMI":  ("Working Memory Index (WMI)",
+                         "the ability to register, retain, and manipulate auditory information in short-term memory"),
+                "PSI":  ("Processing Speed Index (PSI)",
+                         "an individual's speed and accuracy in processing simple visual information"),
+                "FSIQ": ("Full Scale IQ (FSIQ)", "overall cognitive ability across verbal and nonverbal domains"),
+                "Full Scale IQ": ("Full Scale IQ (FSIQ)", "overall cognitive ability across verbal and nonverbal domains"),
+            }
+            score_items = [(k, v) for k, v in cog_scores.items() if k not in ("obtained", "reason", "FSIQ", "Full Scale IQ")]
+            for key, ss in score_items:
+                if key in index_info:
+                    label, desc = index_info[key]
+                    pct   = ss_to_pct(ss)
+                    pace  = ("at a much slower pace in comparison to his/her peers of the same age"
+                             if ss < 80 else
+                             "at a slower pace in comparison to his/her peers of the same age"
+                             if ss < 90 else
+                             "at the same pace as his/her same age peers")
+                    _add_body(doc,
+                        f"His/her skills were evaluated within the {label}. This index measures {desc}. "
+                        f"{patient_name or 'The patient'} received a standard score of {ss} "
+                        f"({ss_to_label(ss)}, {pct}th percentile). "
+                        f"{patient_name or 'The patient'}'s overall skills in this area appear to be developing {pace}.")
+
             _add_body(doc, "Composite Score Summary", space_after=2)
             _wppsi_wisc_table(doc, cog_label)
 
     # ── BASC-3 ────────────────────────────────────────────────────────
     if use_basc and basc_data:
-        form_label = basc_data.get("form", "PRS")
-        _add_subheading(doc, f"Behavior Assessment System for Children, Third Edition (BASC-3), {form_label}")
+        form_label   = basc_data.get("form", "PRS")
+        respondent   = basc_data.get("respondent", "The respondent")
+        form_fullname = ("Parent Rating Scales - Preschool" if "P" in form_label
+                         else "Parent Rating Scales - Child")
+        _add_subheading(doc, f"Behavior Assessment System for Children, ({form_fullname}) BASC-3")
         _add_body(doc, "Composite Score Summary", space_after=2)
         _basc3_composite_table(doc)
         _add_body(doc, "Scale Score Summary", space_after=2)
         _basc3_scale_table(doc)
 
-        # Narrative paragraphs per domain
-        for section_label, t_key, adaptive in [
+        # Note + rater intro paragraph (matches Q-Global format)
+        _add_body(doc,
+            "Note: All classifications of test scores are subject to the application of the standard "
+            "error of measurement (SEM) when making classification decisions.")
+        _add_body(doc,
+            f"This report is based on {respondent}'s rating of {patient_name or 'the patient'}'s behavior "
+            f"using the BASC-3 Parent Rating Scales form. The narrative and scale classifications in this "
+            f"report are based on T scores obtained using norms. Scale scores in the Clinically Significant "
+            f"range suggest a high level of maladjustment. Scores in the At-Risk range may identify a "
+            f"significant problem that may not be severe enough to require formal treatment or may identify "
+            f"the potential of developing a problem that needs careful monitoring.")
+
+        # Narrative sections with proper bold headings (matching originals)
+        basc_narrative = generate_basc3_narrative(basc_data, patient_name, respondent)
+        sections = [
             ("Externalizing Problems",    "ext_t",  False),
             ("Internalizing Problems",    "int_t",  False),
             ("Behavioral Symptoms Index", "bsi_t",  False),
             ("Adaptive Skills",           "adp_t",  True),
-        ]:
+        ]
+        # Split the narrative by section
+        narr_parts = {}
+        current_key = None
+        for line in basc_narrative.split("\n"):
+            for label, _, _ in sections:
+                if line.startswith(f"The {label}"):
+                    current_key = label
+                    break
+            if current_key:
+                narr_parts.setdefault(current_key, []).append(line)
+
+        for section_label, t_key, adaptive in sections:
             t_val = basc_data.get(t_key, None)
-            if t_val is not None:
+            if t_val is None:
+                continue
+            # Bold section heading on its own line
+            sh = doc.add_paragraph()
+            sh.paragraph_format.space_before = Pt(8)
+            sh.paragraph_format.space_after  = Pt(2)
+            sr = sh.add_run(section_label)
+            sr.bold = True; sr.font.size = Pt(11); sr.font.name = "Times New Roman"
+            # Narrative sentences for this section
+            section_lines = narr_parts.get(section_label, [])
+            if section_lines:
+                for line in section_lines:
+                    if line.strip():
+                        _add_body(doc, line.strip())
+            else:
                 cls = t_classification(t_val, adaptive)
-                p = doc.add_paragraph()
-                p.paragraph_format.space_before = Pt(4)
-                p.paragraph_format.space_after  = Pt(4)
-                label_run = p.add_run(f"{section_label}: ")
-                label_run.bold = True; label_run.font.size = Pt(11); label_run.font.name = "Times New Roman"
-                body_run = p.add_run(
-                    f"The {section_label} composite T score was {t_val}, which falls in the "
-                    f"{cls.lower()} range."
-                )
-                body_run.font.size = Pt(11); body_run.font.name = "Times New Roman"
+                ci_lo = t_val - 5; ci_hi = t_val + 5
+                pct = basc_data.get(t_key.replace("_t", "_pct"), "N/A")
+                _add_body(doc,
+                    f"The {section_label} composite scale T score is {t_val}, with a 90% confidence "
+                    f"interval range of {ci_lo}-{ci_hi} and a percentile rank of {pct}. "
+                    f"{patient_name or 'The patient'}'s T score on this composite scale falls in the "
+                    f"{cls} classification range.")
 
     # ── VINELAND-3 ────────────────────────────────────────────────────
     if use_vineland and vineland_data:
         _add_subheading(doc, "Vineland Adaptive Behavior Scales, Third Edition (Vineland-3)")
+        _add_body(doc, "Domain-Level Parent/Caregiver Form Report", space_after=2)
+
+        # Intro paragraph matching Q-Global format exactly
+        _add_body(doc,
+            f"The Vineland-3 Domain-Level Parent/Caregiver Form provides norm-referenced scores for "
+            f"domains and an overall Adaptive Behavior Composite (ABC). Three kinds of results are "
+            f"provided and included in the interpretation below. Standard scores have a mean of 100 and "
+            f"SD of 15. Confidence intervals reflect the effects of measurement error and provide, for "
+            f"each standard score, a range within which {patient_name or 'the patient'}'s true standard "
+            f"score falls with a certain probability or confidence. The confidence level chosen for this "
+            f"report is the 90% confidence interval. A percentile rank is the percentage of individuals "
+            f"in {patient_name or 'the patient'}'s normative age group who scored the same or lower. "
+            f"For example, a percentile rank of 41 indicates that the examinee scored higher than (or "
+            f"the same as) 41% of the age-matched norm sample.")
+
         _add_body(doc, "ABC and Domain Score Summary", space_after=2)
         _vineland_abc_table(doc)
+
+        # Strengths/Weaknesses comparison
+        domain_scores = [vineland_data["comm"], vineland_data["daily"], vineland_data["social"]]
+        mean_domain   = round(sum(domain_scores) / len(domain_scores), 1)
+        _add_body(doc,
+            f"{patient_name or 'The patient'}'s mean domain standard score of {mean_domain} was compared "
+            f"to his/her three domain standard scores to determine possible areas of strength and weakness. "
+            f"The results show that there are no statistically significant strengths or weaknesses at the "
+            f"domain level. In addition, pairwise difference comparisons were performed between all pairs "
+            f"of domain standard scores. The findings are that none of the differences between domain "
+            f"scores are statistically significant.")
+
         _add_body(doc, "Qualitative Descriptors", space_after=2)
         _vineland_qualitative_table(doc)
 
@@ -2363,11 +2480,9 @@ def make_docx(llm_output):
         clas = ados_data.get("classification", "")
         comp = ados_data.get("comparison", "")
 
-        for idx, line in enumerate([
-            f"1. ADOS-2 Classification: {clas}",
-            f"2. Criteria A (Social Communication): Level {crit_a_lvl}" if crit_a_lvl else "2. Criteria A (Social Communication): See table below",
-            f"3. Criteria B (Restricted & Repetitive): Level {crit_b_lvl}" if crit_b_lvl else "3. Criteria B (Restricted & Repetitive): See table below",
-        ], start=1):
+        level_label = {1: "Requiring Support", 2: "Requiring Substantial Support", 3: "Requiring Very Substantial Support"}
+
+        for line in [f"1. ADOS-2 Classification: {clas}"]:
             np = doc.add_paragraph()
             np.paragraph_format.space_before = Pt(2)
             np.paragraph_format.space_after  = Pt(2)
@@ -2377,11 +2492,21 @@ def make_docx(llm_output):
         _add_body(doc, "ASD Severity Levels", space_before=6, space_after=2)
         _asd_severity_table(doc)
 
-        # Criteria severity lines
+        # Criteria A/B in exact template format
         if crit_a_lvl:
-            _add_body(doc, f"Criteria A Severity: Level {crit_a_lvl}")
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after  = Pt(2)
+            r = p.add_run(f"Criteria A -- Social Communication Severity: "
+                          f"Level {crit_a_lvl} -- {level_label.get(int(crit_a_lvl), '')}")
+            r.bold = True; r.font.size = Pt(11); r.font.name = "Times New Roman"
         if crit_b_lvl:
-            _add_body(doc, f"Criteria B Severity: Level {crit_b_lvl}")
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(2)
+            p.paragraph_format.space_after  = Pt(2)
+            r = p.add_run(f"Criteria B -- Restricted / Repetitive Behaviors Severity: "
+                          f"Level {crit_b_lvl} -- {level_label.get(int(crit_b_lvl), '')}")
+            r.bold = True; r.font.size = Pt(11); r.font.name = "Times New Roman"
 
     _add_horizontal_rule(doc)
 
