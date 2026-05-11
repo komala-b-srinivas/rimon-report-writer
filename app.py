@@ -1099,10 +1099,20 @@ if use_basc:
                             if val is not None:
                                 st.session_state[widget_key] = int(val)
 
-                        st.success("Extracted. Switching to Manual Entry tab to review.")
+                        populated = {k: v for k, v in scores.items() if v is not None}
+                        st.success(f"Extracted {len(populated)} scores. Switch to Manual Entry tab to review.")
+                        with st.expander("Raw extracted values (for verification)"):
+                            st.json(scores)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
+
+        # Always show last extracted values if available
+        if st.session_state.get("extracted_basc_scores"):
+            with st.expander("Last extracted scores"):
+                st.json(st.session_state["extracted_basc_scores"])
 
     with basc_manual:
         b_respondent = st.text_input("Respondent name (parent/caregiver)", placeholder="e.g. Thangiere P. Burns")
@@ -1146,25 +1156,25 @@ if use_basc:
                 elif color == "orange": st.warning(f"  → {cls}", icon=None)
             return data
 
-        ext_t,ext_ci_lo,ext_ci_hi,ext_pct = composite_inputs("Externalizing Problems", "ext", 57, 80)
+        ext_t,ext_ci_lo,ext_ci_hi,ext_pct = composite_inputs("Externalizing Problems", "ext", 50, 50)
         basc_data.update({"ext_t":ext_t,"ext_ci_lo":ext_ci_lo,"ext_ci_hi":ext_ci_hi,"ext_pct":ext_pct})
         st.markdown("*Externalizing subscales:*")
         basc_data.update(subscale_inputs(["Hyperactivity","Aggression","Conduct Problems"]))
 
         st.markdown("---")
-        int_t,int_ci_lo,int_ci_hi,int_pct = composite_inputs("Internalizing Problems", "int", 47, 47)
+        int_t,int_ci_lo,int_ci_hi,int_pct = composite_inputs("Internalizing Problems", "int", 50, 50)
         basc_data.update({"int_t":int_t,"int_ci_lo":int_ci_lo,"int_ci_hi":int_ci_hi,"int_pct":int_pct})
         st.markdown("*Internalizing subscales:*")
         basc_data.update(subscale_inputs(["Anxiety","Depression","Somatization"]))
 
         st.markdown("---")
-        bsi_t,bsi_ci_lo,bsi_ci_hi,bsi_pct = composite_inputs("Behavioral Symptoms Index (BSI)", "bsi", 76, 98)
+        bsi_t,bsi_ci_lo,bsi_ci_hi,bsi_pct = composite_inputs("Behavioral Symptoms Index (BSI)", "bsi", 50, 50)
         basc_data.update({"bsi_t":bsi_t,"bsi_ci_lo":bsi_ci_lo,"bsi_ci_hi":bsi_ci_hi,"bsi_pct":bsi_pct})
         st.markdown("*Additional BSI subscales (Atypicality, Withdrawal, Attention Problems):*")
         basc_data.update(subscale_inputs(["Atypicality","Withdrawal","Attention Problems"]))
 
         st.markdown("---")
-        adp_t,adp_ci_lo,adp_ci_hi,adp_pct = composite_inputs("Adaptive Skills", "adp", 23, 1)
+        adp_t,adp_ci_lo,adp_ci_hi,adp_pct = composite_inputs("Adaptive Skills", "adp", 50, 50)
         basc_data.update({"adp_t":adp_t,"adp_ci_lo":adp_ci_lo,"adp_ci_hi":adp_ci_hi,"adp_pct":adp_pct})
         st.markdown("*Adaptive subscales (low T = problem):*")
         basc_data.update(subscale_inputs(["Adaptability","Social Skills","Leadership",
