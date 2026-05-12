@@ -13,6 +13,9 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 import os, json, base64, io, smtplib, subprocess, tempfile
 import fitz  # pymupdf
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+from google.oauth2 import service_account
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
@@ -484,6 +487,44 @@ TRANSCRIPT: {transcript[:6000]}"""
         if raw.startswith("json"): raw = raw[4:]
     return json.loads(raw.strip())
 
+# ── Clinician roster ──────────────────────────────────────────────────
+EXAMINER_ROSTER = {
+    "Daniella Abekassis M.S.":       {"credentials": "M.S.", "role": "Testing Technician / Psychology Intern"},
+    "Shirley Shayestehkhoy B.A.":    {"credentials": "B.A.", "role": "Testing Technician"},
+}
+SUPERVISOR_ROSTER = {
+    "Dr. Gabrielle Kirby, Psy.D.": {
+        "display": "Gabrielle Kirby, Psy.D.",
+        "role":    "Licensed Psychologist, Supervisor",
+        "npi":     "1598984932",
+        "license": "016934",
+    },
+}
+
+# ── Google Drive helper ───────────────────────────────────────────────
+def _drive_service():
+    sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    if not sa_json:
+        return None
+    try:
+        info = json.loads(sa_json)
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/drive.file"])
+        return build("drive", "v3", credentials=creds, cache_discovery=False)
+    except Exception:
+        return None
+
+def upload_to_drive(file_bytes: bytes, filename: str, mime_type: str = "application/octet-stream") -> str | None:
+    """Upload file to Google Drive folder. Returns shareable URL or None."""
+    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
+    svc = _drive_service()
+    if not svc or not folder_id:
+        return None
+    meta = {"name": filename, "parents": [folder_id]}
+    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=False)
+    f = svc.files().create(body=meta, media_body=media, fields="id,webViewLink").execute()
+    return f.get("webViewLink")
+
 def pdf_to_image_bytes(pdf_bytes):
     """Convert first page of a PDF to JPEG bytes for vision model."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -491,12 +532,56 @@ def pdf_to_image_bytes(pdf_bytes):
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
     return pix.tobytes("jpeg")
 
-def extract_scores_from_image(image_bytes, context="neuropsychological evaluation"):
-    b64   = base64.b64encode(image_bytes).decode("utf-8")
+def pdf_to_images_list(pdf_bytes, page_indices=None):
+    """Convert PDF pages to a list of JPEG bytes.
+    page_indices: list of 0-based page numbers to extract, or None = all pages.
+    Will be updated with specific Q-Global page numbers once the actual PDF is reviewed."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    indices = page_indices if page_indices is not None else list(range(len(doc)))
+    result = []
+    for i in indices:
+        if i < len(doc):
+            pix = doc[i].get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+            result.append(pix.tobytes("jpeg"))
+    return result
+
+def extract_scores_from_image(image_bytes_or_list, context="neuropsychological evaluation"):
+    images = image_bytes_or_list if isinstance(image_bytes_or_list, list) else [image_bytes_or_list]
+    image_bytes = images[0]  # kept for mime detection below
     sig   = image_bytes[:4]
     mime  = "image/jpeg" if sig[:3]==b'\xff\xd8\xff' else ("image/png" if sig[:4]==b'\x89PNG' else "image/jpeg")
 
-    if "BASC" in context:
+    if "Vineland" in context:
+        prompt = """You are reading a Vineland-3 Adaptive Behavior Scales score report.
+Extract the Adaptive Behavior Composite (ABC) standard score and the three domain standard scores.
+Return ONLY valid JSON using EXACTLY these key names (use null if not visible):
+{
+  "test_battery": "Vineland-3",
+  "scores": {
+    "ABC": number,
+    "Communication": number,
+    "Daily Living Skills": number,
+    "Socialization": number
+  },
+  "notes": "any issues"
+}
+Return ONLY JSON. Use null for any score not visible."""
+    elif "ADOS" in context:
+        prompt = """You are reading an ADOS-2 (Autism Diagnostic Observation Schedule, Second Edition) score sheet.
+Extract the Social Affect (SA) domain total, Restricted and Repetitive Behavior (RRB) domain total, and the Comparison Score.
+Return ONLY valid JSON using EXACTLY these key names (use null if not visible):
+{
+  "test_battery": "ADOS-2",
+  "scores": {
+    "SA": number,
+    "RRB": number,
+    "Comparison Score": number
+  },
+  "notes": "any issues"
+}
+The SA score is typically 0-28, RRB is 0-10, Comparison Score is 1-10.
+Return ONLY JSON. Use null for any score not visible."""
+    elif "BASC" in context:
         prompt = """You are reading a BASC-3 Parent Rating Scales score report.
 Extract ALL composite and scale T scores and percentile ranks.
 Return ONLY valid JSON using EXACTLY these key names (use null if not visible):
@@ -543,12 +628,18 @@ Extract ALL numerical scores visible. Return ONLY valid JSON:
 {{"test_battery": "name", "scores": {{"field name": number}}, "notes": "any issues"}}
 For T-scores label as "<scale> T". For standard scores label as "<index> SS" or just the index name.
 Return ONLY JSON."""
+    # Build content with all image pages + prompt text
+    content = []
+    for img_b in images:
+        b64_i = base64.b64encode(img_b).decode("utf-8")
+        sig_i = img_b[:4]
+        mime_i = "image/jpeg" if sig_i[:3]==b'\xff\xd8\xff' else ("image/png" if sig_i[:4]==b'\x89PNG' else "image/jpeg")
+        content.append({"type":"image_url","image_url":{"url":f"data:{mime_i};base64,{b64_i}"}})
+    content.append({"type":"text","text":prompt})
+
     resp = client.chat.completions.create(
         model="meta-llama/llama-4-scout-17b-16e-instruct",
-        messages=[{"role":"user","content":[
-            {"type":"image_url","image_url":{"url":f"data:{mime};base64,{b64}"}},
-            {"type":"text","text":prompt}
-        ]}],
+        messages=[{"role":"user","content":content}],
         temperature=0.1, max_tokens=2048,
     )
     raw = resp.choices[0].message.content.strip()
@@ -703,10 +794,14 @@ with col1:
 with col2:
     school_name     = st.text_input("School Name", placeholder="e.g. P.S. 169")
     grade_placement = st.text_input("Grade / Classroom Placement", placeholder="e.g. Pre-K, 6:1+1 classroom")
-    examiner_name   = st.text_input("Examiner Name + Credentials", placeholder="e.g. Daniella Abekassis M.S.")
-    supervisor_name = st.text_input("Supervising Psychologist + Credentials", placeholder="e.g. Dr. Gabrielle Kirby, Psy.D")
-    supervisor_npi  = st.text_input("Supervisor NPI", placeholder="e.g. 1598984932")
-    supervisor_lic  = st.text_input("Supervisor License #", placeholder="e.g. 01694")
+    examiner_key    = st.selectbox("Examiner", list(EXAMINER_ROSTER.keys()))
+    examiner_name   = examiner_key  # used in report
+    supervisor_key  = st.selectbox("Supervising Psychologist", list(SUPERVISOR_ROSTER.keys()))
+    _sup            = SUPERVISOR_ROSTER[supervisor_key]
+    supervisor_name = _sup["display"]
+    supervisor_npi  = _sup["npi"]
+    supervisor_lic  = _sup["license"]
+    st.caption(f"NPI {supervisor_npi} · License # {supervisor_lic}")
 
 st.divider()
 
@@ -876,6 +971,9 @@ with st.container():
             feeding_difficulties = st.text_input("Feeding difficulties",
                 value=_bg.get("feeding_difficulties",""),
                 placeholder="e.g. Recently began self-feeding, does not consume solid foods, milk from bottle")
+            food_preferences = st.text_input("Food preferences / restrictions",
+                value=_bg.get("food_preferences",""),
+                placeholder="e.g. Prefers crunchy textures, refuses mixed foods, limited to 5 foods")
             behavioral_concerns  = st.text_area("Behavioral concerns at home",
                 value=_bg.get("behavioral_concerns",""),
                 placeholder="e.g. Head banging, biting self when needs not met, pacing, rocking",
@@ -1037,13 +1135,32 @@ if use_basc:
     _basc = st.session_state.get("extracted_basc_scores", {})
 
     with basc_photo:
-        basc_img = st.file_uploader("BASC-3 PRS score sheet", type=["jpg","jpeg","png","webp"], key="basc_upload")
+        st.caption("Upload score sheet image or PDF. For Q-Global PDFs, only the first 2 pages are used.")
+        basc_img = st.file_uploader("BASC-3 PRS score sheet", type=["jpg","jpeg","png","webp","pdf"], key="basc_upload")
         if basc_img:
-            st.image(basc_img, use_container_width=True)
+            raw_basc = basc_img.read()
+            if basc_img.name.lower().endswith(".pdf"):
+                _basc_pages_all = pdf_to_images_list(raw_basc)  # all pages — specific pages TBD after Q-Global PDF review
+                # Cap at 10 images per API call to avoid token limits until we know the exact pages
+                _MAX_PAGES = 10
+                basc_img_list = _basc_pages_all[:_MAX_PAGES]
+                st.image(_basc_pages_all[0], caption=f"Page 1 of {len(_basc_pages_all)}", use_container_width=True)
+                if len(_basc_pages_all) > _MAX_PAGES:
+                    st.warning(f"PDF has {len(_basc_pages_all)} pages. Sending first {_MAX_PAGES} for now. Once you share the Q-Global PDF, specific score pages will be targeted.")
+                # Auto-upload to Google Drive
+                _drive_url = upload_to_drive(raw_basc, f"BASC3_{patient_name}_{eval_date}.pdf", "application/pdf")
+                if _drive_url:
+                    st.success(f"Saved to Google Drive: [view file]({_drive_url})")
+            else:
+                st.image(raw_basc, use_container_width=True)
+                basc_img_list = [raw_basc]
+                _drive_url = upload_to_drive(raw_basc, f"BASC3_{patient_name}_{eval_date}.jpg", "image/jpeg")
+                if _drive_url:
+                    st.success(f"Saved to Google Drive: [view file]({_drive_url})")
             if st.button("Extract BASC-3 Scores", type="primary"):
-                with st.spinner("Reading BASC-3 scores..."):
+                with st.spinner("Reading BASC-3 scores (first 2 pages)..."):
                     try:
-                        r = extract_scores_from_image(basc_img.read(), "BASC-3 Parent Rating Scales")
+                        r = extract_scores_from_image(basc_img_list, "BASC-3 Parent Rating Scales")
                         scores = r.get("scores", {})
                         st.session_state["extracted_basc_scores"] = scores
 
@@ -1195,16 +1312,32 @@ if use_vineland:
     _vin = st.session_state.get("extracted_vin_scores", {})
 
     with vin_photo:
-        vin_img = st.file_uploader("Vineland-3 score sheet", type=["jpg","jpeg","png","webp"], key="vin_upload")
+        vin_img = st.file_uploader("Vineland-3 score sheet", type=["jpg","jpeg","png","webp","pdf"], key="vin_upload")
         if vin_img:
-            st.image(vin_img, use_container_width=True)
+            raw_vin = vin_img.read()
+            vin_img_bytes = pdf_to_image_bytes(raw_vin) if vin_img.name.lower().endswith(".pdf") else raw_vin
+            st.image(vin_img_bytes, use_container_width=True)
+            _vin_drive = upload_to_drive(raw_vin, f"Vineland3_{patient_name}_{eval_date}{'.pdf' if vin_img.name.lower().endswith('.pdf') else '.jpg'}", "application/pdf" if vin_img.name.lower().endswith(".pdf") else "image/jpeg")
+            if _vin_drive:
+                st.success(f"Saved to Google Drive: [view file]({_vin_drive})")
             if st.button("Extract Vineland-3 Scores", type="primary"):
                 with st.spinner("Reading Vineland scores..."):
                     try:
-                        r = extract_scores_from_image(vin_img.read(), "Vineland-3 Adaptive Behavior Scales")
-                        st.session_state["extracted_vin_scores"] = r.get("scores",{})
-                        _vin = st.session_state["extracted_vin_scores"]
-                        st.success("Extracted. Review in Manual Entry.")
+                        r = extract_scores_from_image(vin_img_bytes, "Vineland-3 Adaptive Behavior Scales")  # vin_img_bytes already read above
+                        scores = r.get("scores", {})
+                        st.session_state["extracted_vin_scores"] = scores
+                        # Write directly to widget keys so number_inputs update
+                        _vin_key_map = {
+                            "ABC": "vin_abc",
+                            "Communication": "vin_comm",
+                            "Daily Living Skills": "vin_daily",
+                            "Socialization": "vin_social",
+                        }
+                        for extracted_key, widget_key in _vin_key_map.items():
+                            val = scores.get(extracted_key)
+                            if val is not None:
+                                st.session_state[widget_key] = int(val)
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Failed: {e}")
 
@@ -1217,10 +1350,10 @@ if use_vineland:
             st.caption("Standard Scores (mean=100, SD=15)")
 
         c1,c2,c3,c4 = st.columns(4)
-        vin_abc   = c1.number_input("ABC",          20,160, int(_vin.get("ABC",44)))
-        vin_comm  = c2.number_input("Communication",20,160, int(_vin.get("Communication",30)))
-        vin_daily = c3.number_input("Daily Living",  20,160, int(_vin.get("Daily Living Skills",45)))
-        vin_social= c4.number_input("Socialization", 20,160, int(_vin.get("Socialization",42)))
+        vin_abc   = c1.number_input("ABC",          20,160, int(_vin.get("ABC",44)),          key="vin_abc")
+        vin_comm  = c2.number_input("Communication",20,160, int(_vin.get("Communication",30)), key="vin_comm")
+        vin_daily = c3.number_input("Daily Living",  20,160, int(_vin.get("Daily Living Skills",45)), key="vin_daily")
+        vin_social= c4.number_input("Socialization", 20,160, int(_vin.get("Socialization",42)), key="vin_social")
 
         # Auto percentiles
         ap = ss_to_pct(vin_abc); cp = ss_to_pct(vin_comm); dp = ss_to_pct(vin_daily); sp = ss_to_pct(vin_social)
@@ -1257,16 +1390,31 @@ if use_ados:
     _ados = st.session_state.get("extracted_ados_scores", {})
 
     with ados_photo:
-        ados_img = st.file_uploader("ADOS-2 score sheet", type=["jpg","jpeg","png","webp"], key="ados_upload")
+        ados_img = st.file_uploader("ADOS-2 score sheet", type=["jpg","jpeg","png","webp","pdf"], key="ados_upload")
         if ados_img:
-            st.image(ados_img, use_container_width=True)
+            raw_ados = ados_img.read()
+            ados_img_bytes = pdf_to_image_bytes(raw_ados) if ados_img.name.lower().endswith(".pdf") else raw_ados
+            st.image(ados_img_bytes, use_container_width=True)
+            _ados_drive = upload_to_drive(raw_ados, f"ADOS2_{patient_name}_{eval_date}{'.pdf' if ados_img.name.lower().endswith('.pdf') else '.jpg'}", "application/pdf" if ados_img.name.lower().endswith(".pdf") else "image/jpeg")
+            if _ados_drive:
+                st.success(f"Saved to Google Drive: [view file]({_ados_drive})")
             if st.button("Extract ADOS-2 Scores", type="primary"):
                 with st.spinner("Reading ADOS-2 scores..."):
                     try:
-                        r = extract_scores_from_image(ados_img.read(), "ADOS-2 Autism Diagnostic Observation Schedule")
-                        st.session_state["extracted_ados_scores"] = r.get("scores",{})
-                        _ados = st.session_state["extracted_ados_scores"]
-                        st.success("Extracted. Review in Manual Entry.")
+                        r = extract_scores_from_image(ados_img_bytes, "ADOS-2 Autism Diagnostic Observation Schedule")
+                        scores = r.get("scores", {})
+                        st.session_state["extracted_ados_scores"] = scores
+                        # Write directly to widget keys so number_inputs update
+                        _ados_key_map = {
+                            "SA": "ados_sa",
+                            "RRB": "ados_rrb",
+                            "Comparison Score": "ados_comparison",
+                        }
+                        for extracted_key, widget_key in _ados_key_map.items():
+                            val = scores.get(extracted_key)
+                            if val is not None:
+                                st.session_state[widget_key] = int(val)
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Failed: {e}")
 
@@ -1276,11 +1424,11 @@ if use_ados:
             ados_module = st.selectbox("Module", ["Toddler (T)","Module 1","Module 2","Module 3","Module 4"])
             ados_module_reason = st.text_input("Why this module was selected",
                 placeholder="e.g. Selected because patient demonstrates low verbal ability, stating only single words")
-            ados_sa  = st.number_input("Social Affect (SA) raw score", 0, 28, int(_ados.get("SA",20)))
-            ados_rrb = st.number_input("Restricted & Repetitive Behavior (RRB) raw score", 0, 10, int(_ados.get("RRB",8)))
+            ados_sa  = st.number_input("Social Affect (SA) raw score", 0, 28, int(_ados.get("SA",20)), key="ados_sa")
+            ados_rrb = st.number_input("Restricted & Repetitive Behavior (RRB) raw score", 0, 10, int(_ados.get("RRB",8)), key="ados_rrb")
             ados_combined = ados_sa + ados_rrb
             st.metric("Algorithm Combined Total (SA + RRB)", ados_combined)
-            ados_comparison = st.number_input("Comparison Score (1-10)", 1, 10, int(_ados.get("Comparison Score",10)))
+            ados_comparison = st.number_input("Comparison Score (1-10)", 1, 10, int(_ados.get("Comparison Score",10)), key="ados_comparison")
 
         with col2:
             # Auto-classify
@@ -1376,6 +1524,12 @@ with col2:
     rec_aba_detail      = st.text_input("ABA focus areas", placeholder="e.g. Toilet training, aggression, SIB") if rec_aba else ""
     rec_feeding_therapy = st.checkbox("Add feeding therapy to IEP")
     rec_opwdd           = st.checkbox("Refer to OPWDD NYC", value=True)
+    rec_genetics        = st.checkbox("Refer to genetics specialist for hereditary evaluation")
+    no_iep = iep_status in ("No IEP/504", "Unknown")
+    rec_advocacy = st.checkbox(
+        "Refer to free Special Education Advocacy service (no IEP on record)",
+        value=no_iep,
+        help="Recommended when patient does not have an active IEP. Service is free to families.")
     rec_other           = st.text_area("Other recommendations", height=60, placeholder="e.g. Sensory integration therapy, AAC evaluation")
 
 st.divider()
@@ -1429,6 +1583,7 @@ def build_background_text():
     if comm_level: lines.append(f"Communication: {comm_level}" + (f" - {echolalia_detail}" if echolalia and echolalia_detail else ""))
     if not toilet_trained: lines.append("Not toilet trained - wears diapers.")
     if feeding_difficulties: lines.append(f"Feeding: {feeding_difficulties}")
+    if food_preferences:     lines.append(f"Food preferences/restrictions: {food_preferences}")
     if behavioral_concerns: lines.append(f"Behavioral concerns: {behavioral_concerns}")
     if school_name or school_placement_type or grade_placement:
         lines.append(f"School: {school_name or ''} - Placement: {school_placement_type or grade_placement or ''}".strip(" -"))
@@ -1455,6 +1610,8 @@ def build_recs_list():
         recs.append(r + ".")
     if rec_feeding_therapy: recs.append("Add feeding therapy to IEP.")
     if rec_opwdd:           recs.append("Refer to the OPWDD NYC.")
+    if rec_genetics:        recs.append("A referral to a clinical genetics specialist is recommended for comprehensive genetic evaluation and counseling. Given the complexity of the presenting neurodevelopmental profile, genetic testing may identify an underlying hereditary etiology and provide valuable information regarding recurrence risk for the family.")
+    if rec_advocacy:        recs.append("As the patient does not currently have an active Individualized Education Program (IEP), parents/guardians are strongly encouraged to contact a local Special Education Advocacy organization. These services are provided at no cost to families and can assist in navigating the special education process, understanding parental rights, and securing appropriate school-based services and supports.")
     if rec_other:
         for line in rec_other.strip().split("\n"):
             if line.strip(): recs.append(line.strip())
