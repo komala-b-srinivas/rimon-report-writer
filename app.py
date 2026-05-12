@@ -174,6 +174,14 @@ def ss_to_pct(ss):
             return round(SS_PCT[lo] + f * (SS_PCT[hi] - SS_PCT[lo]))
     return 50
 
+def ordinal(n):
+    """Return n with correct ordinal suffix: 1st, 2nd, 3rd, 4th, 11th, 21st…"""
+    try: n = int(n)
+    except (TypeError, ValueError): return str(n)
+    if 11 <= (n % 100) <= 13:
+        return f"{n}th"
+    return f"{n}{['th','st','nd','rd','th','th','th','th','th','th'][n % 10]}"
+
 def ss_to_label(ss):
     """Convert standard score to qualitative label (WPPSI/WISC scale)."""
     ss = int(round(ss))
@@ -2205,7 +2213,7 @@ def _wppsi_wisc_table(doc, cog_label):
         ci_lo  = v - 7
         ci_hi  = v + 7
         abbrev = ABBREV.get(k, k[:6])
-        rows_data.append([k, abbrev, "-", str(v), f"{pct}th",
+        rows_data.append([k, abbrev, "-", str(v), ordinal(pct),
                           f"{ci_lo}-{ci_hi}", qual_desc(v), "-"])
 
     tbl = doc.add_table(rows=1 + len(rows_data), cols=8)
@@ -2251,19 +2259,28 @@ def _basc3_composite_table(doc):
     headers = ["Scale", "Raw Score", "T Score", "Percentile Rank", "90% Confidence Interval"]
     composites = [
         ("Externalizing Problems Composite",
-         basc_data.get("ext_t",""),   basc_data.get("ext_pct","")),
+         basc_data.get("ext_t",""), basc_data.get("ext_pct",""),
+         basc_data.get("ext_ci_lo",""), basc_data.get("ext_ci_hi","")),
         ("Internalizing Problems Composite",
-         basc_data.get("int_t",""),   basc_data.get("int_pct","")),
+         basc_data.get("int_t",""), basc_data.get("int_pct",""),
+         basc_data.get("int_ci_lo",""), basc_data.get("int_ci_hi","")),
         ("Behavioral Symptoms Index",
-         basc_data.get("bsi_t",""),   basc_data.get("bsi_pct","")),
+         basc_data.get("bsi_t",""), basc_data.get("bsi_pct",""),
+         basc_data.get("bsi_ci_lo",""), basc_data.get("bsi_ci_hi","")),
         ("Adaptive Skills Composite",
-         basc_data.get("adp_t",""),   basc_data.get("adp_pct","")),
+         basc_data.get("adp_t",""), basc_data.get("adp_pct",""),
+         basc_data.get("adp_ci_lo",""), basc_data.get("adp_ci_hi","")),
     ]
     rows_data = []
-    for name, t, pct in composites:
-        ci = f"{t-5}-{t+5}" if isinstance(t, (int,float)) else "-"
+    for name, t, pct, ci_lo, ci_hi in composites:
+        if ci_lo != "" and ci_hi != "":
+            ci = f"{ci_lo}-{ci_hi}"
+        elif isinstance(t, (int, float)):
+            ci = f"{t-5}-{t+5}"
+        else:
+            ci = "-"
         rows_data.append([name, "-", str(t) if t != "" else "-",
-                          f"{pct}th" if pct != "" else "-", ci])
+                          ordinal(pct) if pct != "" else "-", ci])
 
     tbl = doc.add_table(rows=1 + len(rows_data), cols=5)
     tbl.style = "Table Grid"
@@ -2298,18 +2315,20 @@ def _basc3_scale_table(doc):
     headers = ["Scale", "Raw Score", "T Score", "Percentile Rank",
                "90% Confidence Interval", "Ipsative Comparison:\nDifference", "Significance Level"]
     scale_keys = [
-        ("Hyperactivity",            "hyperactivity_t",            "hyperactivity_pct",            False),
-        ("Aggression",               "aggression_t",               "aggression_pct",               False),
-        ("Anxiety",                  "anxiety_t",                  "anxiety_pct",                  False),
-        ("Depression",               "depression_t",               "depression_pct",               False),
-        ("Somatization",             "somatization_t",             "somatization_pct",             False),
-        ("Atypicality",              "atypicality_t",              "atypicality_pct",              False),
-        ("Withdrawal",               "withdrawal_t",               "withdrawal_pct",               False),
-        ("Attention Problems",       "attention_problems_t",       "attention_problems_pct",       False),
-        ("Adaptability",             "adaptability_t",             "adaptability_pct",             True),
-        ("Social Skills",            "social_skills_t",            "social_skills_pct",            True),
+        ("Hyperactivity",             "hyperactivity_t",             "hyperactivity_pct",             False),
+        ("Aggression",                "aggression_t",                "aggression_pct",                False),
+        ("Conduct Problems",          "conduct_problems_t",          "conduct_problems_pct",          False),
+        ("Anxiety",                   "anxiety_t",                   "anxiety_pct",                   False),
+        ("Depression",                "depression_t",                "depression_pct",                False),
+        ("Somatization",              "somatization_t",              "somatization_pct",              False),
+        ("Atypicality",               "atypicality_t",               "atypicality_pct",               False),
+        ("Withdrawal",                "withdrawal_t",                "withdrawal_pct",                False),
+        ("Attention Problems",        "attention_problems_t",        "attention_problems_pct",        False),
+        ("Adaptability",              "adaptability_t",              "adaptability_pct",              True),
+        ("Social Skills",             "social_skills_t",             "social_skills_pct",             True),
+        ("Leadership",                "leadership_t",                "leadership_pct",                True),
         ("Activities of Daily Living","activities_of_daily_living_t","activities_of_daily_living_pct",True),
-        ("Functional Communication", "functional_communication_t", "functional_communication_pct", True),
+        ("Functional Communication",  "functional_communication_t",  "functional_communication_pct",  True),
     ]
     rows_data = []
     for name, t_key, pct_key, adaptive in scale_keys:
@@ -2317,7 +2336,7 @@ def _basc3_scale_table(doc):
         pct = basc_data.get(pct_key, "")
         ci  = f"{t-5}-{t+5}" if isinstance(t, (int,float)) else "-"
         rows_data.append([name, "-", str(t) if t != "" else "-",
-                          f"{pct}th" if pct != "" else "-", ci, "-", "-"])
+                          ordinal(pct) if pct != "" else "-", ci, "-", "-"])
 
     col_dxas = [2160, 864, 864, 1080, 1440, 1296, 1296]
     tbl = doc.add_table(rows=1 + len(rows_data), cols=7)
@@ -2370,10 +2389,10 @@ def _vineland_abc_table(doc):
     abc_pct = ss_to_pct(abc) if isinstance(abc, (int,float)) else "-"
 
     rows_data = [
-        ["Adaptive Behavior Composite (ABC)", str(abc),  ci(abc),  f"{abc_pct}th", "-", "-", "-"],
-        ["Communication",                     str(comm), ci(comm), f"{comm_pct}th", "-", "-", "-"],
-        ["Daily Living Skills",               str(daily),ci(daily),f"{daily_pct}th","-", "-", "-"],
-        ["Socialization",                     str(soc),  ci(soc),  f"{soc_pct}th",  "-", "-", "-"],
+        ["Adaptive Behavior Composite (ABC)", str(abc),  ci(abc),  ordinal(abc_pct), "-", "-", "-"],
+        ["Communication",                     str(comm), ci(comm), ordinal(comm_pct), "-", "-", "-"],
+        ["Daily Living Skills",               str(daily),ci(daily),ordinal(daily_pct),"-", "-", "-"],
+        ["Socialization",                     str(soc),  ci(soc),  ordinal(soc_pct),  "-", "-", "-"],
     ]
     col_dxas = [2160, 1080, 1440, 1080, 1080, 1080, 720]
     tbl = doc.add_table(rows=1 + len(rows_data), cols=7)
@@ -2776,7 +2795,7 @@ def make_docx(llm_output):
     # ── BASC-3 ────────────────────────────────────────────────────────
     if use_basc and basc_data:
         form_label   = basc_data.get("form", "PRS")
-        respondent   = basc_data.get("respondent", "The respondent")
+        respondent   = basc_data.get("respondent", "") or "the respondent"
         form_fullname = ("Parent Rating Scales - Preschool" if "P" in form_label
                          else "Parent Rating Scales - Child")
         _add_subheading(doc, f"Behavior Assessment System for Children, ({form_fullname}) BASC-3")
