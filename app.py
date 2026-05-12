@@ -662,6 +662,93 @@ def extract_obs_from_image(image_bytes):
     )
     return resp.choices[0].message.content.strip()
 
+# ══════════════════════════════════════════════════════════════════════
+# Q-GLOBAL DOCX PARSERS  (deterministic — no LLM needed)
+# ══════════════════════════════════════════════════════════════════════
+import re as _re
+
+_BASC_COMPOSITE_NAMES = {
+    "Externalizing Problems", "Internalizing Problems",
+    "Behavioral Symptoms Index", "Adaptive Skills",
+}
+_BASC_SUBSCALE_NAMES = {
+    "Hyperactivity", "Aggression", "Conduct Problems",
+    "Anxiety", "Depression", "Somatization",
+    "Atypicality", "Withdrawal", "Attention Problems",
+    "Adaptability", "Social Skills", "Leadership",
+    "Activities of Daily Living", "Functional Communication",
+}
+_BASC_ALL_NAMES = _BASC_COMPOSITE_NAMES | _BASC_SUBSCALE_NAMES
+
+def _parse_ci(ci_str: str):
+    """Extract (lo, hi) integers from a CI string like '44-54' or '65 - 71'."""
+    nums = _re.findall(r'\d+', ci_str)
+    lo = int(nums[0]) if len(nums) > 0 else None
+    hi = int(nums[1]) if len(nums) > 1 else None
+    return lo, hi
+
+def _safe_int(s: str):
+    s = s.strip()
+    return int(s) if s.lstrip('-').isdigit() else None
+
+def parse_basc_docx(docx_bytes: bytes) -> dict:
+    """Parse Q-Global BASC-3 DOCX export. Returns dict matching extract_scores_from_image key names."""
+    doc = Document(io.BytesIO(docx_bytes))
+    scores = {}
+    for tbl in doc.tables:
+        for row in tbl.rows:
+            cells = [c.text.strip() for c in row.cells]
+            if not cells or cells[0] not in _BASC_ALL_NAMES:
+                continue
+            name = cells[0]
+            # Columns: name | Raw Score | T Score | Percentile Rank | 90% CI | ...
+            if len(cells) < 4:
+                continue
+            t   = _safe_int(cells[2])
+            pct = _safe_int(cells[3])
+            ci_lo, ci_hi = _parse_ci(cells[4]) if len(cells) > 4 else (None, None)
+            scores[f"{name} T"]     = t
+            scores[f"{name} pct"]   = pct
+            if name in _BASC_COMPOSITE_NAMES:
+                scores[f"{name} CI lo"] = ci_lo
+                scores[f"{name} CI hi"] = ci_hi
+    return scores
+
+_VIN_ROW_NAMES = {
+    "Adaptive Behavior Composite": "ABC",
+    "Communication":               "Communication",
+    "Daily Living Skills":         "Daily Living Skills",
+    "Socialization":               "Socialization",
+    # Motor Skills intentionally excluded — not shown in Rimon final reports
+}
+
+def parse_vineland_docx(docx_bytes: bytes) -> dict:
+    """Parse Q-Global Vineland-3 DOCX export. Returns dict matching widget key names.
+    Only reads from the Score Summary table (identified by 'Standard Score' in header)
+    to avoid collision with the 'Report to Parent' table which reuses domain names as text."""
+    doc = Document(io.BytesIO(docx_bytes))
+    scores = {}
+    for tbl in doc.tables:
+        # Identify the score summary table by its header row
+        if not tbl.rows:
+            continue
+        header_cells = [c.text.strip() for c in tbl.rows[0].cells]
+        if not any("Standard Score" in h for h in header_cells):
+            continue
+        # This is the right table — extract domain rows
+        for row in tbl.rows[1:]:
+            cells = [c.text.strip() for c in row.cells]
+            if not cells or cells[0] not in _VIN_ROW_NAMES:
+                continue
+            out_name = _VIN_ROW_NAMES[cells[0]]
+            # Columns: name | Standard Score | 90% CI | Percentile Rank | ...
+            ss  = _safe_int(cells[1]) if len(cells) > 1 else None
+            pct = _safe_int(cells[3]) if len(cells) > 3 else None
+            scores[out_name]          = ss
+            scores[f"{out_name} pct"] = pct
+        break  # only one score summary table exists
+    return scores
+
 
 # ══════════════════════════════════════════════════════════════════════
 # THEME / CUSTOM CSS
@@ -1147,96 +1234,118 @@ if use_basc:
     _basc = st.session_state.get("extracted_basc_scores", {})
 
     with basc_photo:
-        st.caption("Upload score sheet image or PDF. For Q-Global PDFs, only the first 2 pages are used.")
-        basc_img = st.file_uploader("BASC-3 PRS score sheet", type=["jpg","jpeg","png","webp","pdf"], key="basc_upload")
+        st.caption("Upload the Q-Global DOCX export (recommended — 100% accurate) or a photo/PDF of the score sheet.")
+        basc_img = st.file_uploader("BASC-3 PRS score sheet", type=["docx","jpg","jpeg","png","webp","pdf"], key="basc_upload")
+
+        _BASC_KEY_MAP = {
+            "Externalizing Problems T":       "ext_t",
+            "Externalizing Problems CI lo":   "ext_ci_lo",
+            "Externalizing Problems CI hi":   "ext_ci_hi",
+            "Externalizing Problems pct":     "ext_pct",
+            "Internalizing Problems T":       "int_t",
+            "Internalizing Problems CI lo":   "int_ci_lo",
+            "Internalizing Problems CI hi":   "int_ci_hi",
+            "Internalizing Problems pct":     "int_pct",
+            "Behavioral Symptoms Index T":    "bsi_t",
+            "Behavioral Symptoms Index CI lo":"bsi_ci_lo",
+            "Behavioral Symptoms Index CI hi":"bsi_ci_hi",
+            "Behavioral Symptoms Index pct":  "bsi_pct",
+            "Adaptive Skills T":              "adp_t",
+            "Adaptive Skills CI lo":          "adp_ci_lo",
+            "Adaptive Skills CI hi":          "adp_ci_hi",
+            "Adaptive Skills pct":            "adp_pct",
+            "Hyperactivity T":                "hyperactivity_t",
+            "Hyperactivity pct":              "hyperactivity_pct",
+            "Aggression T":                   "aggression_t",
+            "Aggression pct":                 "aggression_pct",
+            "Conduct Problems T":             "conduct_problems_t",
+            "Conduct Problems pct":           "conduct_problems_pct",
+            "Anxiety T":                      "anxiety_t",
+            "Anxiety pct":                    "anxiety_pct",
+            "Depression T":                   "depression_t",
+            "Depression pct":                 "depression_pct",
+            "Somatization T":                 "somatization_t",
+            "Somatization pct":               "somatization_pct",
+            "Atypicality T":                  "atypicality_t",
+            "Atypicality pct":                "atypicality_pct",
+            "Withdrawal T":                   "withdrawal_t",
+            "Withdrawal pct":                 "withdrawal_pct",
+            "Attention Problems T":           "attention_problems_t",
+            "Attention Problems pct":         "attention_problems_pct",
+            "Adaptability T":                 "adaptability_t",
+            "Adaptability pct":               "adaptability_pct",
+            "Social Skills T":                "social_skills_t",
+            "Social Skills pct":              "social_skills_pct",
+            "Leadership T":                   "leadership_t",
+            "Leadership pct":                 "leadership_pct",
+            "Activities of Daily Living T":   "activities_of_daily_living_t",
+            "Activities of Daily Living pct": "activities_of_daily_living_pct",
+            "Functional Communication T":     "functional_communication_t",
+            "Functional Communication pct":   "functional_communication_pct",
+        }
+
         if basc_img:
             raw_basc = basc_img.read()
-            if basc_img.name.lower().endswith(".pdf"):
-                _basc_pages_all = pdf_to_images_list(raw_basc)  # all pages — specific pages TBD after Q-Global PDF review
-                # Cap at 10 images per API call to avoid token limits until we know the exact pages
-                _MAX_PAGES = 10
-                basc_img_list = _basc_pages_all[:_MAX_PAGES]
-                st.image(_basc_pages_all[0], caption=f"Page 1 of {len(_basc_pages_all)}", use_container_width=True)
-                if len(_basc_pages_all) > _MAX_PAGES:
-                    st.warning(f"PDF has {len(_basc_pages_all)} pages. Sending first {_MAX_PAGES} for now. Once you share the Q-Global PDF, specific score pages will be targeted.")
-                # Auto-upload to Google Drive
-                _drive_url = upload_to_drive(raw_basc, f"BASC3_{patient_name}_{eval_date}.pdf", "application/pdf")
-                if _drive_url:
-                    st.success(f"Saved to Google Drive: [view file]({_drive_url})")
+            fname_lower = basc_img.name.lower()
+
+            if fname_lower.endswith(".docx"):
+                # ── Q-Global DOCX: deterministic parse, no AI needed ──
+                st.info("Q-Global DOCX detected — extracting scores directly (no AI).")
+                if st.button("Extract BASC-3 Scores", type="primary", key="basc_extract_btn"):
+                    with st.spinner("Parsing BASC-3 DOCX..."):
+                        try:
+                            scores = parse_basc_docx(raw_basc)
+                            st.session_state["extracted_basc_scores"] = scores
+                            for extracted_key, widget_key in _BASC_KEY_MAP.items():
+                                val = scores.get(extracted_key)
+                                if val is not None:
+                                    st.session_state[widget_key] = int(val)
+                            populated = {k: v for k, v in scores.items() if v is not None}
+                            st.success(f"Parsed {len(populated)} scores from Q-Global export.")
+                            with st.expander("Extracted values"):
+                                st.json(scores)
+                            _drive_url = upload_to_drive(raw_basc, f"BASC3_{patient_name}_{eval_date}.docx",
+                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                            if _drive_url:
+                                st.success(f"Saved to Google Drive: [view file]({_drive_url})")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Parse failed: {e}")
+                            import traceback; st.code(traceback.format_exc())
+
             else:
-                st.image(raw_basc, use_container_width=True)
-                basc_img_list = [raw_basc]
-                _drive_url = upload_to_drive(raw_basc, f"BASC3_{patient_name}_{eval_date}.jpg", "image/jpeg")
+                # ── Image / PDF: vision model fallback ──
+                if fname_lower.endswith(".pdf"):
+                    _basc_pages_all = pdf_to_images_list(raw_basc)
+                    st.image(_basc_pages_all[0], caption=f"Page 1 of {len(_basc_pages_all)}", use_container_width=True)
+                    basc_img_list = _basc_pages_all
+                else:
+                    st.image(raw_basc, use_container_width=True)
+                    basc_img_list = [raw_basc]
+
+                _drive_url = upload_to_drive(raw_basc, f"BASC3_{patient_name}_{eval_date}{'.pdf' if fname_lower.endswith('.pdf') else '.jpg'}",
+                    "application/pdf" if fname_lower.endswith(".pdf") else "image/jpeg")
                 if _drive_url:
                     st.success(f"Saved to Google Drive: [view file]({_drive_url})")
-            if st.button("Extract BASC-3 Scores", type="primary"):
-                with st.spinner("Reading BASC-3 scores (first 2 pages)..."):
-                    try:
-                        r = extract_scores_from_image(basc_img_list, "BASC-3 Parent Rating Scales")
-                        scores = r.get("scores", {})
-                        st.session_state["extracted_basc_scores"] = scores
 
-                        # Map extracted keys → widget session state keys so number_inputs update
-                        _key_map = {
-                            "Externalizing Problems T":       "ext_t",
-                            "Externalizing Problems CI lo":   "ext_ci_lo",
-                            "Externalizing Problems CI hi":   "ext_ci_hi",
-                            "Externalizing Problems pct":     "ext_pct",
-                            "Internalizing Problems T":       "int_t",
-                            "Internalizing Problems CI lo":   "int_ci_lo",
-                            "Internalizing Problems CI hi":   "int_ci_hi",
-                            "Internalizing Problems pct":     "int_pct",
-                            "Behavioral Symptoms Index T":    "bsi_t",
-                            "Behavioral Symptoms Index CI lo":"bsi_ci_lo",
-                            "Behavioral Symptoms Index CI hi":"bsi_ci_hi",
-                            "Behavioral Symptoms Index pct":  "bsi_pct",
-                            "Adaptive Skills T":              "adp_t",
-                            "Adaptive Skills CI lo":          "adp_ci_lo",
-                            "Adaptive Skills CI hi":          "adp_ci_hi",
-                            "Adaptive Skills pct":            "adp_pct",
-                            "Hyperactivity T":                "hyperactivity_t",
-                            "Hyperactivity pct":              "hyperactivity_pct",
-                            "Aggression T":                   "aggression_t",
-                            "Aggression pct":                 "aggression_pct",
-                            "Conduct Problems T":             "conduct_problems_t",
-                            "Conduct Problems pct":           "conduct_problems_pct",
-                            "Anxiety T":                      "anxiety_t",
-                            "Anxiety pct":                    "anxiety_pct",
-                            "Depression T":                   "depression_t",
-                            "Depression pct":                 "depression_pct",
-                            "Somatization T":                 "somatization_t",
-                            "Somatization pct":               "somatization_pct",
-                            "Atypicality T":                  "atypicality_t",
-                            "Atypicality pct":                "atypicality_pct",
-                            "Withdrawal T":                   "withdrawal_t",
-                            "Withdrawal pct":                 "withdrawal_pct",
-                            "Attention Problems T":           "attention_problems_t",
-                            "Attention Problems pct":         "attention_problems_pct",
-                            "Adaptability T":                 "adaptability_t",
-                            "Adaptability pct":               "adaptability_pct",
-                            "Social Skills T":                "social_skills_t",
-                            "Social Skills pct":              "social_skills_pct",
-                            "Leadership T":                   "leadership_t",
-                            "Leadership pct":                 "leadership_pct",
-                            "Activities of Daily Living T":   "activities_of_daily_living_t",
-                            "Activities of Daily Living pct": "activities_of_daily_living_pct",
-                            "Functional Communication T":     "functional_communication_t",
-                            "Functional Communication pct":   "functional_communication_pct",
-                        }
-                        for extracted_key, widget_key in _key_map.items():
-                            val = scores.get(extracted_key)
-                            if val is not None:
-                                st.session_state[widget_key] = int(val)
-
-                        populated = {k: v for k, v in scores.items() if v is not None}
-                        st.success(f"Extracted {len(populated)} scores. Switch to Manual Entry tab to review.")
-                        with st.expander("Raw extracted values (for verification)"):
-                            st.json(scores)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed: {e}")
-                        import traceback
-                        st.code(traceback.format_exc())
+                if st.button("Extract BASC-3 Scores", type="primary", key="basc_extract_btn"):
+                    with st.spinner("Reading BASC-3 scores via AI..."):
+                        try:
+                            r = extract_scores_from_image(basc_img_list, "BASC-3 Parent Rating Scales")
+                            scores = r.get("scores", {})
+                            st.session_state["extracted_basc_scores"] = scores
+                            for extracted_key, widget_key in _BASC_KEY_MAP.items():
+                                val = scores.get(extracted_key)
+                                if val is not None:
+                                    st.session_state[widget_key] = int(val)
+                            populated = {k: v for k, v in scores.items() if v is not None}
+                            st.success(f"Extracted {len(populated)} scores. Switch to Manual Entry tab to review.")
+                            with st.expander("Raw extracted values (for verification)"):
+                                st.json(scores)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
+                            import traceback; st.code(traceback.format_exc())
 
         # Always show last extracted values if available
         if st.session_state.get("extracted_basc_scores"):
@@ -1323,35 +1432,63 @@ if use_vineland:
     vin_photo, vin_manual = st.tabs(["📷  Upload Score Sheet Photo", "✏️  Manual Entry"])
     _vin = st.session_state.get("extracted_vin_scores", {})
 
+    _VIN_KEY_MAP = {
+        "ABC":                "vin_abc",
+        "Communication":      "vin_comm",
+        "Daily Living Skills":"vin_daily",
+        "Socialization":      "vin_social",
+    }
+
     with vin_photo:
-        vin_img = st.file_uploader("Vineland-3 score sheet", type=["jpg","jpeg","png","webp","pdf"], key="vin_upload")
+        st.caption("Upload the Q-Global DOCX export (recommended — 100% accurate) or a photo/PDF of the score sheet.")
+        vin_img = st.file_uploader("Vineland-3 score sheet", type=["docx","jpg","jpeg","png","webp","pdf"], key="vin_upload")
         if vin_img:
             raw_vin = vin_img.read()
-            vin_img_bytes = pdf_to_image_bytes(raw_vin) if vin_img.name.lower().endswith(".pdf") else raw_vin
-            st.image(vin_img_bytes, use_container_width=True)
-            _vin_drive = upload_to_drive(raw_vin, f"Vineland3_{patient_name}_{eval_date}{'.pdf' if vin_img.name.lower().endswith('.pdf') else '.jpg'}", "application/pdf" if vin_img.name.lower().endswith(".pdf") else "image/jpeg")
-            if _vin_drive:
-                st.success(f"Saved to Google Drive: [view file]({_vin_drive})")
-            if st.button("Extract Vineland-3 Scores", type="primary"):
-                with st.spinner("Reading Vineland scores..."):
-                    try:
-                        r = extract_scores_from_image(vin_img_bytes, "Vineland-3 Adaptive Behavior Scales")  # vin_img_bytes already read above
-                        scores = r.get("scores", {})
-                        st.session_state["extracted_vin_scores"] = scores
-                        # Write directly to widget keys so number_inputs update
-                        _vin_key_map = {
-                            "ABC": "vin_abc",
-                            "Communication": "vin_comm",
-                            "Daily Living Skills": "vin_daily",
-                            "Socialization": "vin_social",
-                        }
-                        for extracted_key, widget_key in _vin_key_map.items():
-                            val = scores.get(extracted_key)
-                            if val is not None:
-                                st.session_state[widget_key] = int(val)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed: {e}")
+            fname_lower_vin = vin_img.name.lower()
+
+            if fname_lower_vin.endswith(".docx"):
+                st.info("Q-Global DOCX detected — extracting scores directly (no AI).")
+                if st.button("Extract Vineland-3 Scores", type="primary", key="vin_extract_btn"):
+                    with st.spinner("Parsing Vineland-3 DOCX..."):
+                        try:
+                            scores = parse_vineland_docx(raw_vin)
+                            st.session_state["extracted_vin_scores"] = scores
+                            for extracted_key, widget_key in _VIN_KEY_MAP.items():
+                                val = scores.get(extracted_key)
+                                if val is not None:
+                                    st.session_state[widget_key] = int(val)
+                            populated = {k: v for k, v in scores.items() if v is not None}
+                            st.success(f"Parsed {len(populated)} scores from Q-Global export.")
+                            with st.expander("Extracted values"):
+                                st.json(scores)
+                            _vin_drive = upload_to_drive(raw_vin, f"Vineland3_{patient_name}_{eval_date}.docx",
+                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                            if _vin_drive:
+                                st.success(f"Saved to Google Drive: [view file]({_vin_drive})")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Parse failed: {e}")
+                            import traceback; st.code(traceback.format_exc())
+            else:
+                vin_img_bytes = pdf_to_image_bytes(raw_vin) if fname_lower_vin.endswith(".pdf") else raw_vin
+                st.image(vin_img_bytes, use_container_width=True)
+                _vin_drive = upload_to_drive(raw_vin, f"Vineland3_{patient_name}_{eval_date}{'.pdf' if fname_lower_vin.endswith('.pdf') else '.jpg'}",
+                    "application/pdf" if fname_lower_vin.endswith(".pdf") else "image/jpeg")
+                if _vin_drive:
+                    st.success(f"Saved to Google Drive: [view file]({_vin_drive})")
+                if st.button("Extract Vineland-3 Scores", type="primary", key="vin_extract_btn"):
+                    with st.spinner("Reading Vineland scores via AI..."):
+                        try:
+                            r = extract_scores_from_image(vin_img_bytes, "Vineland-3 Adaptive Behavior Scales")
+                            scores = r.get("scores", {})
+                            st.session_state["extracted_vin_scores"] = scores
+                            for extracted_key, widget_key in _VIN_KEY_MAP.items():
+                                val = scores.get(extracted_key)
+                                if val is not None:
+                                    st.session_state[widget_key] = int(val)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
 
     with vin_manual:
         col1, col2 = st.columns(2)
