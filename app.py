@@ -1573,11 +1573,16 @@ if use_ados:
             ados_module = st.selectbox("Module", ["Toddler (T)","Module 1","Module 2","Module 3","Module 4"])
             ados_module_reason = st.text_input("Why this module was selected",
                 placeholder="e.g. Selected because patient demonstrates low verbal ability, stating only single words")
-            ados_sa  = st.number_input("Social Affect (SA) raw score", 0, 28, int(_ados.get("SA",20)), key="ados_sa")
-            ados_rrb = st.number_input("Restricted & Repetitive Behavior (RRB) raw score", 0, 10, int(_ados.get("RRB",8)), key="ados_rrb")
+            def _ados_int(key, default, lo, hi):
+                v = _ados.get(key)
+                try: v = int(v)
+                except (TypeError, ValueError): v = default
+                return max(lo, min(hi, v))
+            ados_sa  = st.number_input("Social Affect (SA) raw score", 0, 28, _ados_int("SA", 20, 0, 28), key="ados_sa")
+            ados_rrb = st.number_input("Restricted & Repetitive Behavior (RRB) raw score", 0, 10, _ados_int("RRB", 8, 0, 10), key="ados_rrb")
             ados_combined = ados_sa + ados_rrb
             st.metric("Algorithm Combined Total (SA + RRB)", ados_combined)
-            ados_comparison = st.number_input("Comparison Score (1-10)", 1, 10, int(_ados.get("Comparison Score",10)), key="ados_comparison")
+            ados_comparison = st.number_input("Comparison Score (1-10)", 1, 10, _ados_int("Comparison Score", 10, 1, 10), key="ados_comparison")
 
         with col2:
             # Auto-classify
