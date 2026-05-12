@@ -1760,7 +1760,7 @@ def build_background_text():
 def build_recs_list():
     recs = []
     if rec_parent_meeting:  recs.append("Meet with parents/guardians to review the results and findings of the Psychological-ASD evaluation.")
-    recs.append("It is common for those diagnosed with ASD to have comorbidities such as anxiety, depression, and ADHD. Follow-up with a medical provider (Psychiatrist or Neurologist) is recommended in addition to continuing with outside therapy.")
+    if rec_medical_followup: recs.append("It is common for those diagnosed with ASD to have comorbidities such as anxiety, depression, and ADHD. Follow-up with a medical provider (Psychiatrist or Neurologist) is recommended in addition to continuing with outside therapy.")
     if rec_cpse:
         r = f"Contact the office of Special Education in the NYC DOE, submit the report and request a CPSE meeting"
         if rec_classification: r += f" to change classification to {rec_classification}"
@@ -2786,7 +2786,7 @@ def make_docx(llm_output):
                     _add_body(doc,
                         f"His/her skills were evaluated within the {label}. This index measures {desc}. "
                         f"{patient_name or 'The patient'} received a standard score of {ss} "
-                        f"({ss_to_label(ss)}, {pct}th percentile). "
+                        f"({ss_to_label(ss)}, {ordinal(pct)} percentile). "
                         f"{patient_name or 'The patient'}'s overall skills in this area appear to be developing {pace}.")
 
             _add_body(doc, "Composite Score Summary", space_after=2)
@@ -2796,7 +2796,8 @@ def make_docx(llm_output):
     if use_basc and basc_data:
         form_label   = basc_data.get("form", "PRS")
         respondent   = basc_data.get("respondent", "") or "the respondent"
-        form_fullname = ("Parent Rating Scales - Preschool" if "P" in form_label
+        form_fullname = ("Parent Rating Scales - Preschool" if "Preschool" in form_label
+                         else "Parent Rating Scales - Adolescent" if "Adolescent" in form_label
                          else "Parent Rating Scales - Child")
         _add_subheading(doc, f"Behavior Assessment System for Children, ({form_fullname}) BASC-3")
         _add_body(doc, "Composite Score Summary", space_after=2)
