@@ -794,13 +794,26 @@ with col1:
 with col2:
     school_name     = st.text_input("School Name", placeholder="e.g. P.S. 169")
     grade_placement = st.text_input("Grade / Classroom Placement", placeholder="e.g. Pre-K, 6:1+1 classroom")
-    examiner_key    = st.selectbox("Examiner", list(EXAMINER_ROSTER.keys()))
-    examiner_name   = examiner_key  # used in report
-    supervisor_key  = st.selectbox("Supervising Psychologist", list(SUPERVISOR_ROSTER.keys()))
-    _sup            = SUPERVISOR_ROSTER[supervisor_key]
-    supervisor_name = _sup["display"]
-    supervisor_npi  = st.text_input("Supervisor NPI", value=_sup["npi"])
-    supervisor_lic  = st.text_input("Supervisor License #", value=_sup["license"])
+    examiner_key    = st.selectbox("Examiner", ["-- Select --"] + list(EXAMINER_ROSTER.keys()) + ["Other (enter manually)"])
+    if examiner_key == "Other (enter manually)":
+        examiner_name = st.text_input("Examiner name + credentials", placeholder="e.g. Jane Doe M.S.")
+    elif examiner_key == "-- Select --":
+        examiner_name = ""
+    else:
+        examiner_name = examiner_key
+
+    supervisor_key  = st.selectbox("Supervising Psychologist", ["-- Select --"] + list(SUPERVISOR_ROSTER.keys()) + ["Other (enter manually)"])
+    if supervisor_key == "Other (enter manually)":
+        supervisor_name = st.text_input("Supervisor name + credentials", placeholder="e.g. Dr. Jane Doe, Psy.D.")
+        supervisor_npi  = st.text_input("Supervisor NPI", placeholder="e.g. 1234567890")
+        supervisor_lic  = st.text_input("Supervisor License #", placeholder="e.g. 012345")
+    elif supervisor_key == "-- Select --":
+        supervisor_name, supervisor_npi, supervisor_lic = "", "", ""
+    else:
+        _sup            = SUPERVISOR_ROSTER[supervisor_key]
+        supervisor_name = _sup["display"]
+        supervisor_npi  = st.text_input("Supervisor NPI", value=_sup["npi"])
+        supervisor_lic  = st.text_input("Supervisor License #", value=_sup["license"])
 
 st.divider()
 
