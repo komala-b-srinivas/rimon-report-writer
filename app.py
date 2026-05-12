@@ -799,9 +799,8 @@ with col2:
     supervisor_key  = st.selectbox("Supervising Psychologist", list(SUPERVISOR_ROSTER.keys()))
     _sup            = SUPERVISOR_ROSTER[supervisor_key]
     supervisor_name = _sup["display"]
-    supervisor_npi  = _sup["npi"]
-    supervisor_lic  = _sup["license"]
-    st.caption(f"NPI {supervisor_npi} · License # {supervisor_lic}")
+    supervisor_npi  = st.text_input("Supervisor NPI", value=_sup["npi"])
+    supervisor_lic  = st.text_input("Supervisor License #", value=_sup["license"])
 
 st.divider()
 
