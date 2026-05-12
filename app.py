@@ -372,14 +372,21 @@ def generate_vineland_narrative(abc, comm, daily, social, comm_pct, daily_pct, s
     social_pct_str = f"<1" if social_pct == 0 else str(social_pct)
 
     comm_rel  = "relative weakness" if comm < min(daily, social) else ("relative strength" if comm > max(daily, social) else "within the same range as other domains")
+    comm_rel_phrase = f"a {comm_rel}" if comm_rel in ("relative weakness", "relative strength") else comm_rel
     daily_note = ""
     social_note = ""
 
-    text = f"""{name} was evaluated using the Vineland-3 Comprehensive Parent/Caregiver Form on {date_completed}. {rater.capitalize()}, {name}'s caregiver, completed the form.
+    # Respondent intro — avoid "The caregiver, AA's caregiver" when no name given
+    if rater and rater.lower() not in ("the caregiver", "caregiver"):
+        rater_intro = f"{rater.capitalize()}, {name}'s caregiver, completed the form."
+    else:
+        rater_intro = f"{name}'s caregiver completed the form."
+
+    text = f"""{name} was evaluated using the Vineland-3 Comprehensive Parent/Caregiver Form on {date_completed}. {rater_intro}
 
 {name}'s overall level of adaptive functioning is described by the score on the Adaptive Behavior Composite (ABC). The ABC score is {abc}, which is {"well " if abc < 70 else ""}{"below" if abc < 85 else "within"} the normative mean of 100 (the normative standard deviation is 15). The percentile rank for this overall score is {abc_pct_str}. The ABC score is based on scores for three specific adaptive behavior domains: Communication, Daily Living Skills, and Socialization.
 
-The Communication domain measures how well {name} listens and understands, expresses themselves through speech, and reads and writes. The Communication standard score is {comm}. This corresponds to a percentile rank of {comm_pct_str}. This domain is a {comm_rel} for {name}.
+The Communication domain measures how well {name} listens and understands, expresses themselves through speech, and reads and writes. The Communication standard score is {comm}. This corresponds to a percentile rank of {comm_pct_str}. This domain is {comm_rel_phrase} for {name}.
 
 The Daily Living Skills domain assesses {name}'s performance of the practical, everyday tasks of living that are appropriate for age. The standard score for Daily Living Skills is {daily}, which corresponds to a percentile rank of {daily_pct_str}.
 
