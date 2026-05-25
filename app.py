@@ -936,6 +936,8 @@ with col1:
     use_wppsi   = st.checkbox("WPPSI-IV (Cognitive)", value=True)
     use_wisc    = st.checkbox("WISC-V (Cognitive - if age 6+)")
     use_ados    = st.checkbox("ADOS-2", value=True)
+    use_ctoni   = st.checkbox("C-TONI-2 (Non-verbal IQ)")
+    use_ptoni   = st.checkbox("P-TONI (Non-verbal IQ - ages 3-9)")
 with col2:
     use_basc    = st.checkbox("BASC-3 PRS (Behavior - Parent Rating)", value=True)
     use_vineland= st.checkbox("Vineland-3 (Adaptive Behavior - Parent)", value=True)
@@ -1216,6 +1218,9 @@ if use_wppsi or use_wisc:
                         st.error(f"Extraction failed: {e}")
 
     with cog_manual:
+        nonverbal_mode = st.checkbox("Non-verbal / Underresponsive patient (use estimated subtest template)", value=False, key="cog_nonverbal")
+        cog_scores["nonverbal_mode"] = nonverbal_mode
+
         obtained = st.radio("Were scores obtained?", ["Yes - full battery administered", "No - unable to obtain scores"], horizontal=True)
         if "No" in obtained:
             cog_not_obtained_reason = st.text_area("Reason scores not obtained",
@@ -1225,16 +1230,64 @@ if use_wppsi or use_wisc:
             cog_scores["reason"]   = cog_not_obtained_reason
         else:
             cog_scores["obtained"] = True
-            st.caption("Enter index scores (Standard Score, mean=100, SD=15)")
-            col1, col2 = st.columns(2)
-            with col1:
-                for label, default in [("Full Scale IQ (FSIQ)",85),("Verbal Comprehension Index (VCI)",82),("Visual Spatial Index (VSI)",88)]:
-                    v = st.number_input(label, 40, 160, int(_cog.get(label, default)))
-                    cog_scores[label] = v
-            with col2:
-                for label, default in [("Fluid Reasoning Index (FRI)",84),("Working Memory Index (WMI)",80),("Processing Speed Index (PSI)",78)]:
-                    v = st.number_input(label, 40, 160, int(_cog.get(label, default)))
-                    cog_scores[label] = v
+            if nonverbal_mode:
+                st.caption("Non-verbal mode: subtest-level scaled scores (1-19). Composite scores defaulted to floor (<70).")
+                # --- Subtest inputs ---
+                if use_wppsi:
+                    st.markdown("**WPPSI-IV Subtests** (scaled score 1-19, default 1 for non-verbal template)")
+                    wppsi_subtests = [
+                        ("Information","IN",False),("Similarities","SI",False),("Vocabulary","VC",False),
+                        ("Comprehension","CO",True),("Block Design","BD",False),("Object Assembly","OA",True),
+                        ("Matrix Reasoning","MR",False),("Picture Concepts","PC",False),("Picture Memory","PM",False),
+                        ("Zoo Locations","ZL",False),("Bug Search","BS",True),("Cancellation","CA",False),
+                        ("Animal Coding","AC",False),
+                    ]
+                    subtest_col1, subtest_col2 = st.columns(2)
+                    subtest_scores = {}
+                    for idx, (name, abbrev, optional) in enumerate(wppsi_subtests):
+                        col_target = subtest_col1 if idx % 2 == 0 else subtest_col2
+                        with col_target:
+                            help_txt = "Optional/supplemental" if optional else None
+                            val = st.number_input(f"{name} ({abbrev})", 1, 19, 1, key=f"wppsi_sub_{abbrev}", help=help_txt)
+                            subtest_scores[name] = val
+                else:
+                    st.markdown("**WISC-V Subtests** (scaled score 1-19, default 1 for non-verbal template)")
+                    wisc_subtests = [
+                        ("Similarities","SI"),("Vocabulary","VC"),("Block Design","BD"),
+                        ("Visual Puzzles","VP"),("Matrix Reasoning","MR"),("Figure Weights","FW"),
+                        ("Picture Span","PS"),("Digit Span","DS"),("Symbol Search","SS"),("Coding","CD"),
+                    ]
+                    subtest_col1, subtest_col2 = st.columns(2)
+                    subtest_scores = {}
+                    for idx, (name, abbrev) in enumerate(wisc_subtests):
+                        col_target = subtest_col1 if idx % 2 == 0 else subtest_col2
+                        with col_target:
+                            val = st.number_input(f"{name} ({abbrev})", 1, 19, 1, key=f"wisc_sub_{abbrev}")
+                            subtest_scores[name] = val
+                cog_scores["subtests"] = subtest_scores
+
+                # --- Composite scores (estimated floor) ---
+                st.caption("Estimated composite scores (floor <70). Pre-filled with 69. Edit if higher scores obtained.")
+                col1, col2 = st.columns(2)
+                with col1:
+                    for label, default in [("Full Scale IQ (FSIQ)",69),("Verbal Comprehension Index (VCI)",69),("Visual Spatial Index (VSI)",69)]:
+                        v = st.number_input(label, 40, 160, int(_cog.get(label, default)), key=f"cog_est_{label}")
+                        cog_scores[label] = v
+                with col2:
+                    for label, default in [("Fluid Reasoning Index (FRI)",69),("Working Memory Index (WMI)",69),("Processing Speed Index (PSI)",69)]:
+                        v = st.number_input(label, 40, 160, int(_cog.get(label, default)), key=f"cog_est_{label}")
+                        cog_scores[label] = v
+            else:
+                st.caption("Enter index scores (Standard Score, mean=100, SD=15)")
+                col1, col2 = st.columns(2)
+                with col1:
+                    for label, default in [("Full Scale IQ (FSIQ)",85),("Verbal Comprehension Index (VCI)",82),("Visual Spatial Index (VSI)",88)]:
+                        v = st.number_input(label, 40, 160, int(_cog.get(label, default)))
+                        cog_scores[label] = v
+                with col2:
+                    for label, default in [("Fluid Reasoning Index (FRI)",84),("Working Memory Index (WMI)",80),("Processing Speed Index (PSI)",78)]:
+                        v = st.number_input(label, 40, 160, int(_cog.get(label, default)))
+                        cog_scores[label] = v
 
     st.divider()
 
@@ -1586,6 +1639,8 @@ if use_ados:
         col1, col2 = st.columns(2)
         with col1:
             ados_module = st.selectbox("Module", ["Toddler (T)","Module 1","Module 2","Module 3","Module 4"])
+            if ados_module in ("Toddler (T)", "Module 1", "Module 2"):
+                st.info("Non-verbal patient detected — consider adding C-TONI or P-TONI.")
             ados_module_reason = st.text_input("Why this module was selected",
                 placeholder="e.g. Selected because patient demonstrates low verbal ability, stating only single words")
             def _ados_int(key, default, lo, hi):
@@ -1657,6 +1712,123 @@ if use_ados:
             "language_impairment": language_impairment,
             "criteria_a_level": criteria_a_level, "criteria_b_level": criteria_b_level,
         }
+
+    st.divider()
+
+# ══════════════════════════════════════════════════════════════════════
+# BLOCK 6e - C-TONI-2
+# ══════════════════════════════════════════════════════════════════════
+ctoni_data = {}
+if use_ctoni:
+    st.subheader("C-TONI-2 — Comprehensive Test of Nonverbal Intelligence")
+
+    def _ctoni_classification(ss):
+        if ss >= 130: return "Very Superior"
+        elif ss >= 120: return "Superior"
+        elif ss >= 111: return "Above Average"
+        elif ss >= 90: return "Average"
+        elif ss >= 80: return "Below Average"
+        elif ss >= 70: return "Poor"
+        else: return "Very Poor"
+
+    def _ctoni_subtest_class(scaled):
+        if scaled <= 7: return "Below Average"
+        elif scaled <= 12: return "Average"
+        else: return "Above Average"
+
+    ctoni_upload_tab, ctoni_manual_tab = st.tabs(["Upload Score Sheet", "Manual Entry"])
+
+    with ctoni_upload_tab:
+        st.info("Manual entry below.")
+
+    with ctoni_manual_tab:
+        st.caption("Composite scores (Standard Score: mean=100, SD=15)")
+        ctoni_col1, ctoni_col2 = st.columns(2)
+        with ctoni_col1:
+            ctoni_pictorial_ss = st.number_input("Pictorial Scale Standard Score", 40, 160, 86, key="ctoni_pic_ss")
+            ctoni_pictorial_pct = st.number_input("Pictorial Scale Percentile", 0, 99, 18, key="ctoni_pic_pct")
+            pic_class = _ctoni_classification(ctoni_pictorial_ss)
+            st.caption(f"Classification: {pic_class}")
+
+            ctoni_geometric_ss = st.number_input("Geometric Scale Standard Score", 40, 160, 91, key="ctoni_geo_ss")
+            ctoni_geometric_pct = st.number_input("Geometric Scale Percentile", 0, 99, 21, key="ctoni_geo_pct")
+            geo_class = _ctoni_classification(ctoni_geometric_ss)
+            st.caption(f"Classification: {geo_class}")
+
+        with ctoni_col2:
+            ctoni_fsiq_ss = st.number_input("Full Scale IQ Standard Score", 40, 160, 87, key="ctoni_fsiq_ss")
+            ctoni_fsiq_pct = st.number_input("Full Scale IQ Percentile", 0, 99, 19, key="ctoni_fsiq_pct")
+            fsiq_class = _ctoni_classification(ctoni_fsiq_ss)
+            st.caption(f"Classification: {fsiq_class}")
+
+        st.caption("Subtest scaled scores (1-19) and percentiles")
+        ctoni_sub_col1, ctoni_sub_col2 = st.columns(2)
+        ctoni_subtests_def = [
+            ("Pictorial Analogies","pictorial_analogies"),
+            ("Pictorial Categories","pictorial_categories"),
+            ("Pictorial Sequences","pictorial_sequences"),
+            ("Geometric Analogies","geometric_analogies"),
+            ("Geometric Categories","geometric_categories"),
+            ("Geometric Sequences","geometric_sequences"),
+        ]
+        ctoni_subtest_scores = {}
+        for idx, (name, key) in enumerate(ctoni_subtests_def):
+            col_target = ctoni_sub_col1 if idx % 2 == 0 else ctoni_sub_col2
+            with col_target:
+                ss_val = st.number_input(f"{name} Scaled Score", 1, 19, 9, key=f"ctoni_{key}_ss")
+                pct_val = st.number_input(f"{name} Percentile", 0, 99, 25, key=f"ctoni_{key}_pct")
+                ctoni_subtest_scores[key] = {"ss": ss_val, "pct": pct_val}
+
+        ctoni_data = {
+            "pictorial_ss": ctoni_pictorial_ss, "pictorial_pct": ctoni_pictorial_pct,
+            "geometric_ss": ctoni_geometric_ss, "geometric_pct": ctoni_geometric_pct,
+            "fsiq_ss": ctoni_fsiq_ss, "fsiq_pct": ctoni_fsiq_pct,
+            "pictorial_analogies_ss": ctoni_subtest_scores["pictorial_analogies"]["ss"],
+            "pictorial_analogies_pct": ctoni_subtest_scores["pictorial_analogies"]["pct"],
+            "pictorial_categories_ss": ctoni_subtest_scores["pictorial_categories"]["ss"],
+            "pictorial_categories_pct": ctoni_subtest_scores["pictorial_categories"]["pct"],
+            "pictorial_sequences_ss": ctoni_subtest_scores["pictorial_sequences"]["ss"],
+            "pictorial_sequences_pct": ctoni_subtest_scores["pictorial_sequences"]["pct"],
+            "geometric_analogies_ss": ctoni_subtest_scores["geometric_analogies"]["ss"],
+            "geometric_analogies_pct": ctoni_subtest_scores["geometric_analogies"]["pct"],
+            "geometric_categories_ss": ctoni_subtest_scores["geometric_categories"]["ss"],
+            "geometric_categories_pct": ctoni_subtest_scores["geometric_categories"]["pct"],
+            "geometric_sequences_ss": ctoni_subtest_scores["geometric_sequences"]["ss"],
+            "geometric_sequences_pct": ctoni_subtest_scores["geometric_sequences"]["pct"],
+        }
+
+    st.divider()
+
+# ══════════════════════════════════════════════════════════════════════
+# BLOCK 6f - P-TONI
+# ══════════════════════════════════════════════════════════════════════
+ptoni_data = {}
+if use_ptoni:
+    st.subheader("P-TONI — Primary Test of Nonverbal Intelligence")
+
+    def _ptoni_classification(ss):
+        if ss >= 130: return "Very Superior"
+        elif ss >= 120: return "Superior"
+        elif ss >= 111: return "Above Average"
+        elif ss >= 90: return "Average"
+        elif ss >= 80: return "Below Average"
+        elif ss >= 70: return "Poor"
+        else: return "Very Poor"
+
+    ptoni_fsiq_ss = st.number_input("Full Scale IQ Standard Score", 40, 160, 85, key="ptoni_fsiq_ss")
+    ptoni_fsiq_pct = st.number_input("Percentile", 0, 99, 16, key="ptoni_fsiq_pct")
+    ptoni_age_equiv = st.text_input("Age Equivalent (e.g. 4:6)", value="4:6", key="ptoni_age_equiv")
+    ptoni_class = _ptoni_classification(ptoni_fsiq_ss)
+    st.caption(f"Classification: {ptoni_class}")
+    ptoni_obs_notes = st.text_area("Behavioral observation / administration conditions notes", height=80, key="ptoni_obs_notes",
+        placeholder="e.g. Patient pointed to responses without verbal output. Testing conducted in a quiet room with minimal distractors.")
+
+    ptoni_data = {
+        "fsiq_ss": ptoni_fsiq_ss,
+        "fsiq_pct": ptoni_fsiq_pct,
+        "age_equiv": ptoni_age_equiv,
+        "obs_notes": ptoni_obs_notes,
+    }
 
     st.divider()
 
@@ -1735,6 +1907,8 @@ def build_eval_materials_list():
     if use_basc:    tests.append(f"Behavior Assessment System for Children - 3rd Edition ({basc_data.get('form','PRS-P')})")
     if use_vineland:tests.append("Vineland Adaptive Behavior Scales - Parent")
     if use_case:    tests.append("Case Materials Reviewed")
+    if use_ctoni:   tests.append("Comprehensive Test of Nonverbal Intelligence, Second Edition (CTONI-2)")
+    if use_ptoni:   tests.append("Primary Test of Nonverbal Intelligence (PTONI)")
     if extra_tests: tests += [t.strip() for t in extra_tests.split(",") if t.strip()]
     return tests
 
@@ -1871,6 +2045,8 @@ Assessment data:
 BASC-3: BSI T={basc_data.get('bsi_t','N/A')}, Adaptive Skills T={basc_data.get('adp_t','N/A')}
 Vineland-3: ABC={vineland_data.get('abc','N/A') if vineland_data else 'N/A'}
 ADOS-2: Classification={ados_data.get('classification','N/A') if ados_data else 'N/A'}, Combined={ados_data.get('combined','N/A') if ados_data else 'N/A'}
+{("C-TONI-2: FSIQ SS=" + str(ctoni_data.get('fsiq_ss','N/A')) + " (" + str(ctoni_data.get('fsiq_pct','N/A')) + "th pct), Pictorial SS=" + str(ctoni_data.get('pictorial_ss','N/A')) + ", Geometric SS=" + str(ctoni_data.get('geometric_ss','N/A'))) if ctoni_data else ""}
+{("P-TONI: FSIQ SS=" + str(ptoni_data.get('fsiq_ss','N/A')) + " (" + str(ptoni_data.get('fsiq_pct','N/A')) + "th pct), Age Equiv=" + str(ptoni_data.get('age_equiv','N/A'))) if ptoni_data else ""}
 
 ---
 Return ONLY the three sections with these exact headers:
@@ -2566,6 +2742,242 @@ def _asd_severity_table(doc):
             for c in row.cells: _shd_cell(c, "F2F2F2")
     doc.add_paragraph()
 
+_SCALED_TO_PCT = {
+    1: 0.1, 2: 0.4, 3: 1, 4: 2, 5: 5, 6: 9, 7: 16, 8: 25, 9: 37,
+    10: 50, 11: 63, 12: 75, 13: 84, 14: 91, 15: 95, 16: 98, 17: 99, 18: 99.6, 19: 99.9
+}
+
+def _scaled_pct(ss):
+    return str(_SCALED_TO_PCT.get(int(ss), 0.1))
+
+def _ctoni_classification(ss):
+    ss = int(ss)
+    if ss >= 130: return "Very Superior"
+    elif ss >= 120: return "Superior"
+    elif ss >= 111: return "Above Average"
+    elif ss >= 90: return "Average"
+    elif ss >= 80: return "Below Average"
+    elif ss >= 70: return "Poor"
+    else: return "Very Poor"
+
+def _ctoni_subtest_class(scaled):
+    scaled = int(scaled)
+    if scaled <= 7: return "Below Average"
+    elif scaled <= 12: return "Average"
+    else: return "Above Average"
+
+def _ptoni_classification(ss):
+    ss = int(ss)
+    if ss >= 130: return "Very Superior"
+    elif ss >= 120: return "Superior"
+    elif ss >= 111: return "Above Average"
+    elif ss >= 90: return "Average"
+    elif ss >= 80: return "Below Average"
+    elif ss >= 70: return "Poor"
+    else: return "Very Poor"
+
+def _ctoni_table(doc):
+    """Build C-TONI-2 composite + subtest table and narrative."""
+    if not ctoni_data:
+        return
+    _add_subheading(doc, "Comprehensive Test of Nonverbal Intelligence, Second Edition (CTONI-2)")
+
+    headers = ["Index", "Standard Score", "Percentile", "Classification", "Notes"]
+    col_dxas = [2592, 1080, 864, 1728, 1296]
+
+    rows_data = [
+        ("Pictorial Scale",
+         str(ctoni_data["pictorial_ss"]),
+         ordinal(ctoni_data["pictorial_pct"]),
+         _ctoni_classification(ctoni_data["pictorial_ss"]),
+         "-"),
+        ("  Pictorial Analogies",
+         str(ctoni_data["pictorial_analogies_ss"]),
+         ordinal(ctoni_data["pictorial_analogies_pct"]),
+         _ctoni_subtest_class(ctoni_data["pictorial_analogies_ss"]),
+         "subtest"),
+        ("  Pictorial Categories",
+         str(ctoni_data["pictorial_categories_ss"]),
+         ordinal(ctoni_data["pictorial_categories_pct"]),
+         _ctoni_subtest_class(ctoni_data["pictorial_categories_ss"]),
+         "subtest"),
+        ("  Pictorial Sequences",
+         str(ctoni_data["pictorial_sequences_ss"]),
+         ordinal(ctoni_data["pictorial_sequences_pct"]),
+         _ctoni_subtest_class(ctoni_data["pictorial_sequences_ss"]),
+         "subtest"),
+        ("Geometric Scale",
+         str(ctoni_data["geometric_ss"]),
+         ordinal(ctoni_data["geometric_pct"]),
+         _ctoni_classification(ctoni_data["geometric_ss"]),
+         "-"),
+        ("  Geometric Analogies",
+         str(ctoni_data["geometric_analogies_ss"]),
+         ordinal(ctoni_data["geometric_analogies_pct"]),
+         _ctoni_subtest_class(ctoni_data["geometric_analogies_ss"]),
+         "subtest"),
+        ("  Geometric Categories",
+         str(ctoni_data["geometric_categories_ss"]),
+         ordinal(ctoni_data["geometric_categories_pct"]),
+         _ctoni_subtest_class(ctoni_data["geometric_categories_ss"]),
+         "subtest"),
+        ("  Geometric Sequences",
+         str(ctoni_data["geometric_sequences_ss"]),
+         ordinal(ctoni_data["geometric_sequences_pct"]),
+         _ctoni_subtest_class(ctoni_data["geometric_sequences_ss"]),
+         "subtest"),
+        ("Full Scale IQ",
+         str(ctoni_data["fsiq_ss"]),
+         ordinal(ctoni_data["fsiq_pct"]),
+         _ctoni_classification(ctoni_data["fsiq_ss"]),
+         "-"),
+    ]
+
+    tbl = doc.add_table(rows=1 + len(rows_data), cols=5)
+    tbl.style = "Table Grid"
+    hdr = tbl.rows[0]
+    for i, (h, dxa) in enumerate(zip(headers, col_dxas)):
+        c = hdr.cells[i]
+        c.width = Inches(dxa / 1440)
+        c.text = h
+        _shd_cell(c, "D9D9D9")
+        for para in c.paragraphs:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in para.runs:
+                run.bold = True; run.font.size = Pt(9); run.font.name = "Times New Roman"
+    for ri, row_vals in enumerate(rows_data):
+        row = tbl.rows[ri + 1]
+        for ci, (val, dxa) in enumerate(zip(row_vals, col_dxas)):
+            c = row.cells[ci]
+            c.width = Inches(dxa / 1440)
+            c.text = val
+            align = WD_ALIGN_PARAGRAPH.LEFT if ci == 0 else WD_ALIGN_PARAGRAPH.CENTER
+            for para in c.paragraphs:
+                para.alignment = align
+                for run in para.runs:
+                    run.font.size = Pt(9); run.font.name = "Times New Roman"
+        if ri % 2 == 1:
+            for c in row.cells: _shd_cell(c, "EEF7FD")
+    doc.add_paragraph()
+
+    # Narrative
+    pic_ss = ctoni_data["pictorial_ss"]
+    pic_pct = ctoni_data["pictorial_pct"]
+    geo_ss = ctoni_data["geometric_ss"]
+    geo_pct = ctoni_data["geometric_pct"]
+    fsiq_ss = ctoni_data["fsiq_ss"]
+    fsiq_pct = ctoni_data["fsiq_pct"]
+
+    def _range_text(cls):
+        low_ranges = {"Very Poor", "Poor", "Below Average"}
+        mid_ranges = {"Average"}
+        return ("significantly below average" if cls in low_ranges
+                else "within average limits" if cls in mid_ranges
+                else "above average")
+
+    pic_class = _ctoni_classification(pic_ss)
+    geo_class = _ctoni_classification(geo_ss)
+    fsiq_class = _ctoni_classification(fsiq_ss)
+
+    # Per-subtest one-sentence descriptions
+    pa_cls = _ctoni_subtest_class(ctoni_data["pictorial_analogies_ss"])
+    pc_cls = _ctoni_subtest_class(ctoni_data["pictorial_categories_ss"])
+    ps_cls = _ctoni_subtest_class(ctoni_data["pictorial_sequences_ss"])
+    ga_cls = _ctoni_subtest_class(ctoni_data["geometric_analogies_ss"])
+    gc_cls = _ctoni_subtest_class(ctoni_data["geometric_categories_ss"])
+    gs_cls = _ctoni_subtest_class(ctoni_data["geometric_sequences_ss"])
+
+    _add_body(doc,
+        "The Comprehensive Test of Nonverbal Intelligence-2 (CTONI-2) is an assessment made of six subtests "
+        "yielding a nonverbal intelligence quotient. The CTONI-2 uses concrete and abstract concepts to measure "
+        "an individual's cognitive functioning on three domains: Analogies, Categories, and Sequences.")
+
+    _add_body(doc,
+        f"The Pictorial Scale score of {pic_ss} fell at the {ordinal(pic_pct)} percentile, the {pic_class} Range. "
+        f"The data suggest this patient's ability to solve problems and reason with concrete stimuli is "
+        f"{_range_text(pic_class)} when compared to peers of the same age. The Pictorial Scale consists of three "
+        f"subtests: Pictorial Analogies, Pictorial Categories, and Pictorial Sequences. "
+        f"Performance on Pictorial Analogies was {pa_cls}. "
+        f"Performance on Pictorial Categories was {pc_cls}. "
+        f"Performance on Pictorial Sequences was {ps_cls}.")
+
+    _add_body(doc,
+        f"The Geometric Scale Standard Score of {geo_ss} fell within the {geo_class} Range. "
+        f"The data suggest this patient's ability to solve problems and reason with abstract stimuli is "
+        f"{_range_text(geo_class)} when compared to peers of the same age. "
+        f"Performance on Geometric Analogies was {ga_cls}. "
+        f"Performance on Geometric Categories was {gc_cls}. "
+        f"Performance on Geometric Sequences was {gs_cls}.")
+
+    _add_body(doc,
+        f"The Full Scale Intelligence Quotient (FSIQ) score of {fsiq_ss} fell within the {fsiq_class} Range. "
+        f"The data suggest this patient's general level of cognitive functioning is {_range_text(fsiq_class)} "
+        f"when compared to peers of the same age.")
+
+def _ptoni_table(doc):
+    """Build P-TONI composite table and narrative."""
+    if not ptoni_data:
+        return
+    _add_subheading(doc, "Primary Test of Nonverbal Intelligence (PTONI)")
+
+    _add_body(doc,
+        "The PTONI assesses reasoning abilities in young children. The nonverbal format of the PTONI is "
+        "especially appropriate for testing children who typically are not verbally or motorically well "
+        "developed. The test format requires a child to look at a series of pictures on each page in the "
+        "Picture Book and point to the one picture that does not belong with the others. Items are arranged "
+        "in order of difficulty. Early items measure lower order reasoning (e.g., visual and spatial "
+        "perception). Later items measure higher order reasoning abilities (e.g., analogical thinking, "
+        "sequential reasoning, and categorical formulation). A child's performance is recorded as a standard "
+        "score (called the Nonverbal Index), a percentile rank, and an age equivalent.")
+
+    _add_body(doc,
+        "(Very Superior 130 and above; Superior 120-130; Above Average 111-120; Average 90-100; "
+        "Below Average 80-89; Poor 70-79; Very Poor 70 and Below)")
+
+    headers = ["Index", "Nonverbal Standard Score", "Percentile", "Classification", "Age Equivalent"]
+    col_dxas = [2160, 1440, 864, 1728, 1368]
+
+    fsiq_ss = ptoni_data["fsiq_ss"]
+    fsiq_pct = ptoni_data["fsiq_pct"]
+    age_equiv = ptoni_data.get("age_equiv", "N/A")
+    ptoni_class = _ptoni_classification(fsiq_ss)
+
+    rows_data = [("Full Scale IQ", str(fsiq_ss), ordinal(fsiq_pct), ptoni_class, age_equiv)]
+
+    tbl = doc.add_table(rows=2, cols=5)
+    tbl.style = "Table Grid"
+    hdr = tbl.rows[0]
+    for i, (h, dxa) in enumerate(zip(headers, col_dxas)):
+        c = hdr.cells[i]
+        c.width = Inches(dxa / 1440)
+        c.text = h
+        _shd_cell(c, "D9D9D9")
+        for para in c.paragraphs:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in para.runs:
+                run.bold = True; run.font.size = Pt(9); run.font.name = "Times New Roman"
+    row = tbl.rows[1]
+    for ci, (val, dxa) in enumerate(zip(rows_data[0], col_dxas)):
+        c = row.cells[ci]
+        c.width = Inches(dxa / 1440)
+        c.text = val
+        align = WD_ALIGN_PARAGRAPH.LEFT if ci == 0 else WD_ALIGN_PARAGRAPH.CENTER
+        for para in c.paragraphs:
+            para.alignment = align
+            for run in para.runs:
+                run.font.size = Pt(9); run.font.name = "Times New Roman"
+    doc.add_paragraph()
+
+    # Results paragraph
+    _add_body(doc,
+        f"Results from the PTONI assessment indicate that {patient_name or 'the patient'}'s nonverbal "
+        f"cognitive ability falls in the {ptoni_class} range, as he/she earned a Full Scale score of {fsiq_ss}.")
+
+    obs_notes = ptoni_data.get("obs_notes", "")
+    if obs_notes and obs_notes.strip():
+        _add_body(doc, obs_notes.strip())
+
+
 def make_docx(llm_output):
     """Build a professional Word document matching the Rimon Health evaluation report format."""
     LOGO_PATH = "/Users/komalabelursrinivas/Desktop/rimon-prototype/rimon_logo.png"
@@ -2797,7 +3209,159 @@ def make_docx(llm_output):
                         f"{patient_name or 'The patient'}'s overall skills in this area appear to be developing {pace}.")
 
             _add_body(doc, "Composite Score Summary", space_after=2)
-            _wppsi_wisc_table(doc, cog_label)
+
+            if cog_scores.get("nonverbal_mode"):
+                # ── Non-verbal mode: subtest table + estimated composite table + narrative ──
+                battery = cog_label  # "WPPSI-IV" or "WISC-V"
+
+                # Subtest table
+                subtest_headers = ["Subtest Name", "Abbrev", "Total Raw Score",
+                                   "Scaled Score", "Percentile Rank", "Age Equivalent", "SEM"]
+                sub_col_dxas = [2160, 720, 1080, 864, 1080, 864, 432]
+                subtests_dict = cog_scores.get("subtests", {})
+
+                if use_wppsi:
+                    subtest_order = [
+                        ("Information","IN"),("Similarities","SI"),("Vocabulary","VC"),
+                        ("Comprehension","CO"),("Block Design","BD"),("Object Assembly","OA"),
+                        ("Matrix Reasoning","MR"),("Picture Concepts","PC"),("Picture Memory","PM"),
+                        ("Zoo Locations","ZL"),("Bug Search","BS"),("Cancellation","CA"),("Animal Coding","AC"),
+                    ]
+                else:
+                    subtest_order = [
+                        ("Similarities","SI"),("Vocabulary","VC"),("Block Design","BD"),
+                        ("Visual Puzzles","VP"),("Matrix Reasoning","MR"),("Figure Weights","FW"),
+                        ("Picture Span","PS"),("Digit Span","DS"),("Symbol Search","SS"),("Coding","CD"),
+                    ]
+
+                sub_rows = []
+                for name, abbrev in subtest_order:
+                    ss_val = subtests_dict.get(name, 1)
+                    pct_val = _SCALED_TO_PCT.get(int(ss_val), 0.1)
+                    sub_rows.append([name, abbrev, "-", str(ss_val), str(pct_val), "<2:6", "-"])
+
+                sub_tbl = doc.add_table(rows=1 + len(sub_rows), cols=7)
+                sub_tbl.style = "Table Grid"
+                sub_hdr = sub_tbl.rows[0]
+                for i, (h, dxa) in enumerate(zip(subtest_headers, sub_col_dxas)):
+                    c = sub_hdr.cells[i]
+                    c.width = Inches(dxa / 1440)
+                    c.text = h
+                    _shd_cell(c, "D9D9D9")
+                    for para in c.paragraphs:
+                        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        for run in para.runs:
+                            run.bold = True; run.font.size = Pt(8); run.font.name = "Times New Roman"
+                for ri, row_vals in enumerate(sub_rows):
+                    row = sub_tbl.rows[ri + 1]
+                    for ci, (val, dxa) in enumerate(zip(row_vals, sub_col_dxas)):
+                        c = row.cells[ci]
+                        c.width = Inches(dxa / 1440)
+                        c.text = val
+                        align = WD_ALIGN_PARAGRAPH.LEFT if ci == 0 else WD_ALIGN_PARAGRAPH.CENTER
+                        for para in c.paragraphs:
+                            para.alignment = align
+                            for run in para.runs:
+                                run.font.size = Pt(8); run.font.name = "Times New Roman"
+                    if ri % 2 == 1:
+                        for c in row.cells: _shd_cell(c, "EEF7FD")
+                doc.add_paragraph()
+
+                # Estimated composite table
+                comp_headers = ["Composite", "Abbrev.", "Composite Score",
+                                "Percentile Rank", "Qualitative Description", "SEM"]
+                comp_col_dxas = [2592, 864, 1080, 1080, 1728, 432]
+                comp_map = [
+                    ("Verbal Comprehension Index (VCI)", "VCI", "Verbal Comprehension Index (VCI)"),
+                    ("Visual Spatial Index (VSI)",       "VSI", "Visual Spatial Index (VSI)"),
+                    ("Fluid Reasoning Index (FRI)",      "FRI", "Fluid Reasoning Index (FRI)"),
+                    ("Working Memory Index (WMI)",       "WMI", "Working Memory Index (WMI)"),
+                    ("Processing Speed Index (PSI)",     "PSI", "Processing Speed Index (PSI)"),
+                    ("Estimated Full Scale IQ (FSIQ)",   "FSIQ","Full Scale IQ (FSIQ)"),
+                ]
+                comp_rows = []
+                for display_name, abbrev, key in comp_map:
+                    val = cog_scores.get(key, 69)
+                    score_str = "<70" if val <= 70 else str(val)
+                    comp_rows.append([display_name, abbrev, score_str, "1st", "Extremely Low", "-"])
+
+                comp_tbl = doc.add_table(rows=1 + len(comp_rows), cols=6)
+                comp_tbl.style = "Table Grid"
+                comp_hdr = comp_tbl.rows[0]
+                for i, (h, dxa) in enumerate(zip(comp_headers, comp_col_dxas)):
+                    c = comp_hdr.cells[i]
+                    c.width = Inches(dxa / 1440)
+                    c.text = h
+                    _shd_cell(c, "D9D9D9")
+                    for para in c.paragraphs:
+                        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        for run in para.runs:
+                            run.bold = True; run.font.size = Pt(8); run.font.name = "Times New Roman"
+                for ri, row_vals in enumerate(comp_rows):
+                    row = comp_tbl.rows[ri + 1]
+                    for ci, (val, dxa) in enumerate(zip(row_vals, comp_col_dxas)):
+                        c = row.cells[ci]
+                        c.width = Inches(dxa / 1440)
+                        c.text = val
+                        align = WD_ALIGN_PARAGRAPH.LEFT if ci == 0 else WD_ALIGN_PARAGRAPH.CENTER
+                        for para in c.paragraphs:
+                            para.alignment = align
+                            for run in para.runs:
+                                run.font.size = Pt(8); run.font.name = "Times New Roman"
+                    if ri % 2 == 1:
+                        for c in row.cells: _shd_cell(c, "EEF7FD")
+                doc.add_paragraph()
+
+                # Fixed narrative paragraphs
+                if battery == "WPPSI-IV":
+                    intro_para = (
+                        "The WPPSI-IV (Wechsler Preschool and Primary Scale of Intelligence, Fourth Edition) "
+                        "is a standardized tool designed to measure cognitive abilities in children aged 2 years "
+                        "6 months to 7 years 7 months. It provides multiple scores including Verbal Comprehension "
+                        "(VCI), Visual Spatial (VSI), Fluid Reasoning (FRI), Working Memory (WMI), Processing "
+                        "Speed (PSI), and Full Scale IQ (FSIQ), along with ancillary indices such as the Nonverbal "
+                        "Index (NVI) and General Ability Index (GAI)."
+                    )
+                else:
+                    intro_para = (
+                        "The WISC-V (Wechsler Intelligence Scale for Children, Fifth Edition) is a standardized "
+                        "tool designed to measure cognitive abilities in children ages 6.0 through 16.11 years old. "
+                        "It provides multiple scores including Verbal Comprehension (VCI), Visual Spatial (VSI), "
+                        "Fluid Reasoning (FRI), Working Memory (WMI), Processing Speed (PSI), and Full Scale IQ "
+                        "(FSIQ), along with ancillary indices such as the Nonverbal Index (NVI) and General Ability "
+                        "Index (GAI)."
+                    )
+                _add_body(doc, intro_para)
+
+                _add_body(doc,
+                    "Standard Score Interpretation: Mean (Average) Score: 100, Standard Deviation: 15. "
+                    "Score Ranges: Extremely Low: <70 (<2nd percentile); Borderline: 70-79 (3rd-8th percentile); "
+                    "Low Average: 80-89 (9th-25th percentile); Average: 90-109 (26th-74th percentile); "
+                    "High Average: 110-119 (75th-89th percentile); Superior: 120-129 (90th-95th percentile); "
+                    "Very Superior: 130+ (96th-99th percentile).")
+
+                _add_body(doc,
+                    f"Extremely low {battery} scores (<70) represent significant cognitive delays relative to "
+                    "same-age peers and may suggest the presence of an intellectual disability or substantial "
+                    "neurodevelopmental impairment. Children with scores in the extremely low range typically "
+                    "show some or all of the following: Marked difficulty learning age-appropriate academic skills "
+                    "(reading, writing, math). Severe limitations in problem-solving, memory retention, and abstract "
+                    "thinking. Need for specialized instruction or individualized educational plans (IEPs) in a "
+                    "structured setting. Possible comorbidities: attention deficits, language delays, or "
+                    "visual/spatial processing disorders.")
+
+                _add_body(doc,
+                    f"Interpreting extremely low {battery} scores requires careful consideration of contextual "
+                    "and environmental factors. These include: Testing conditions: fatigue, anxiety, distractibility, "
+                    "language comprehension, and motivation can significantly impact scores. Language or communication "
+                    "barriers: non-native language speakers or children with expressive/receptive language delays may "
+                    "score artificially low. Medical or developmental history: preterm birth, history of brain injury, "
+                    "or chronic health conditions can affect cognitive development. "
+                    f"{battery} results should not be interpreted in isolation. Scores may be influenced by motivation, "
+                    "test-taking behavior, or fatigue. Specialist consultation is essential to differentiate true "
+                    "cognitive deficits from environmental or situational factors.")
+            else:
+                _wppsi_wisc_table(doc, cog_label)
 
     # ── BASC-3 ────────────────────────────────────────────────────────
     if use_basc and basc_data:
@@ -2961,6 +3525,14 @@ def make_docx(llm_output):
             r = p.add_run(f"Criteria B -- Restricted / Repetitive Behaviors Severity: "
                           f"Level {crit_b_lvl} -- {level_label.get(int(crit_b_lvl), '')}")
             r.bold = True; r.font.size = Pt(11); r.font.name = "Times New Roman"
+
+    # ── C-TONI-2 ──────────────────────────────────────────────────────
+    if use_ctoni and ctoni_data:
+        _ctoni_table(doc)
+
+    # ── P-TONI ────────────────────────────────────────────────────────
+    if use_ptoni and ptoni_data:
+        _ptoni_table(doc)
 
     _add_horizontal_rule(doc)
 
