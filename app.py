@@ -144,7 +144,7 @@ def check_password():
             if not uname.strip():
                 st.error("Please enter your name.")
             else:
-                # Per-clinician password lookup — key is lowercase first name
+                # Per-clinician password lookup - key is lowercase first name
                 _safe_key = "".join(c for c in uname.strip().lower() if c.isalnum())[:24]
                 try:
                     _cli_passwords = dict(st.secrets["clinician_passwords"])
@@ -235,7 +235,7 @@ if not st.session_state.get("patient_selected"):
     _saves = _list_patient_saves()
     if _saves:
         st.markdown("### Welcome back!")
-        st.markdown(f"**{st.session_state.get('username', '')}** — pick up where you left off, or start a new patient.")
+        st.markdown(f"**{st.session_state.get('username', '')}** - pick up where you left off, or start a new patient.")
         st.divider()
         for _disp, _at, _path, _data in _saves:
             _col_a, _col_b, _col_c = st.columns([4, 2, 1])
@@ -274,7 +274,7 @@ if not st.session_state.get("patient_selected"):
             st.rerun()
         st.stop()
     else:
-        # No saves yet — skip straight to form
+        # No saves yet - skip straight to form
         st.session_state["patient_selected"] = True
         st.session_state["autosave_loaded"] = True
 
@@ -433,7 +433,7 @@ BASC3_INTERP = {
 
 def strip_emdashes(text: str) -> str:
     """Remove all em-dashes and en-dashes from text.
-    Spaced variants ( — ) become ', '; bare variants become a hyphen."""
+    Spaced variants ( - ) become ', '; bare variants become a hyphen."""
     # HTML/unicode entities
     for ent in ("&mdash;", "&#8212;", "&ndash;", "&#8211;"):
         text = text.replace(ent, "-")
@@ -523,7 +523,7 @@ def generate_vineland_narrative(abc, comm, daily, social, comm_pct, daily_pct, s
     daily_note = ""
     social_note = ""
 
-    # Respondent intro — avoid "The caregiver, AA's caregiver" when no name given
+    # Respondent intro - avoid "The caregiver, AA's caregiver" when no name given
     if rater and rater.lower() not in ("the caregiver", "caregiver"):
         rater_intro = f"{rater.capitalize()}, {name}'s caregiver, completed the form."
     else:
@@ -895,7 +895,7 @@ _VIN_ROW_NAMES = {
     "Communication":               "Communication",
     "Daily Living Skills":         "Daily Living Skills",
     "Socialization":               "Socialization",
-    # Motor Skills intentionally excluded — not shown in Rimon final reports
+    # Motor Skills intentionally excluded - not shown in Rimon final reports
 }
 
 def parse_vineland_docx(docx_bytes: bytes) -> dict:
@@ -911,7 +911,7 @@ def parse_vineland_docx(docx_bytes: bytes) -> dict:
         header_cells = [c.text.strip() for c in tbl.rows[0].cells]
         if not any("Standard Score" in h for h in header_cells):
             continue
-        # This is the right table — extract domain rows
+        # This is the right table - extract domain rows
         for row in tbl.rows[1:]:
             cells = [c.text.strip() for c in row.cells]
             if not cells or cells[0] not in _VIN_ROW_NAMES:
@@ -1125,7 +1125,7 @@ with st.expander("Record or Upload Session Audio to Auto-Fill Fields", expanded=
     st.caption("Record or upload the intake session. AI will transcribe it and extract all background fields automatically.")
     bg_input_mode = st.radio("Input method", ["Record in-app", "Upload audio file", "Paste transcript"], horizontal=True, key="bg_input_mode")
 
-    # ── segment list — persists across recordings ──────────────────────
+    # ── segment list - persists across recordings ──────────────────────
     if "recording_segments" not in st.session_state:
         st.session_state["recording_segments"] = []  # list of {"label": str, "text": str}
 
@@ -1230,7 +1230,7 @@ Recording transcript: {t}"""
     # ── Show accumulated segments ──────────────────────────────────────
     segs = st.session_state.get("recording_segments", [])
     if segs:
-        st.caption(f"**{len(segs)} clip(s) recorded** — combined transcript below. Delete any clip to remove it.")
+        st.caption(f"**{len(segs)} clip(s) recorded** - combined transcript below. Delete any clip to remove it.")
         for i, seg in enumerate(segs):
             sc1, sc2 = st.columns([5, 1])
             with sc1:
@@ -1401,7 +1401,7 @@ st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════
-# BULK UPLOAD — drop all score sheets at once, auto-extract
+# BULK UPLOAD - drop all score sheets at once, auto-extract
 # ══════════════════════════════════════════════════════════════════════
 def _detect_file_type_bulk(fname):
     n = fname.lower()
@@ -1412,7 +1412,7 @@ def _detect_file_type_bulk(fname):
     if any(x in n for x in ["basc","behavior"]):     return "basc_image"
     if any(x in n for x in ["vineland","adaptive"]): return "vineland_image"
     if any(x in n for x in ["ados","autism"]):       return "ados_image"
-    return "cog_image"   # default — cognitive score sheet
+    return "cog_image"   # default - cognitive score sheet
 
 _BULK_BASC_KEY_MAP = {
     "Externalizing Problems T":"ext_t","Externalizing Problems CI lo":"ext_ci_lo",
@@ -1447,7 +1447,7 @@ _BULK_VIN_KEY_MAP = {
 _BULK_ADOS_KEY_MAP = {"SA":"ados_sa","RRB":"ados_rrb","Comparison Score":"ados_comparison"}
 
 st.subheader("Upload Score Sheets")
-st.caption("Drop all files at once — Q-Global DOCX for BASC-3/Vineland-3, image/PDF for all others. Scores auto-populate in the sections below.")
+st.caption("Drop all files at once - Q-Global DOCX for BASC-3/Vineland-3, image/PDF for all others. Scores auto-populate in the sections below.")
 
 if "bulk_extracted" not in st.session_state:
     st.session_state["bulk_extracted"] = {}
@@ -1543,15 +1543,15 @@ if bulk_files:
         import time; time.sleep(0.3)
         st.rerun()
 
-# Summary chips — show what was extracted
+# Summary chips - show what was extracted
 _bulk_cache = st.session_state.get("bulk_extracted", {})
 if _bulk_cache:
     for entry in _bulk_cache.values():
         if entry.get("error"):
-            st.warning(f"**{entry['fname']}** — could not extract: {entry['error']}", icon="⚠️")
+            st.warning(f"**{entry['fname']}** - could not extract: {entry['error']}", icon="⚠️")
         else:
             n = len([v for v in entry.get("scores", {}).values() if v is not None])
-            st.success(f"**{entry['fname']}** — {n} scores loaded", icon="✅")
+            st.success(f"**{entry['fname']}** - {n} scores loaded", icon="✅")
     if st.button("Clear uploads and start fresh", key="bulk_clear"):
         st.session_state["bulk_extracted"] = {}
         for k in [
@@ -1575,7 +1575,7 @@ if use_wppsi or use_wisc or use_wais:
     _cog = st.session_state.get("extracted_cog_scores", {})
     _cog_ready = bool(_cog or st.session_state.get("cog_manual_mode", False))
     if not _cog_ready:
-        st.info(f"Upload the {cog_label} score sheet in the drop zone above — scores will auto-fill here.")
+        st.info(f"Upload the {cog_label} score sheet in the drop zone above - scores will auto-fill here.")
         if st.button("Enter scores manually instead", key="cog_manual_btn"):
             st.session_state["cog_manual_mode"] = True
             st.rerun()
@@ -1664,7 +1664,7 @@ if use_basc:
     _basc = st.session_state.get("extracted_basc_scores", {})
     _basc_ready = bool(_basc or st.session_state.get("basc_manual_mode", False))
     if not _basc_ready:
-        st.info("Upload the BASC-3 Q-Global DOCX in the drop zone above — scores will auto-fill here.")
+        st.info("Upload the BASC-3 Q-Global DOCX in the drop zone above - scores will auto-fill here.")
         if st.button("Enter scores manually instead", key="basc_manual_btn"):
             st.session_state["basc_manual_mode"] = True
             st.rerun()
@@ -1907,7 +1907,7 @@ def _ctoni_subtest_class(scaled):
     else: return "Above Average"
 
 if use_ctoni:
-    st.subheader("C-TONI-2 — Comprehensive Test of Nonverbal Intelligence")
+    st.subheader("C-TONI-2 - Comprehensive Test of Nonverbal Intelligence")
     _ctoni_ready = bool(st.session_state.get("extracted_ctoni_scores") or st.session_state.get("ctoni_manual_mode"))
     if not _ctoni_ready:
         st.info("Upload the C-TONI-2 score sheet image in the drop zone above -- scores will auto-fill here.")
@@ -1988,7 +1988,7 @@ def _ptoni_classification(ss):
     else: return "Very Poor"
 
 if use_ptoni:
-    st.subheader("P-TONI — Primary Test of Nonverbal Intelligence")
+    st.subheader("P-TONI - Primary Test of Nonverbal Intelligence")
     _ptoni_ready = bool(st.session_state.get("extracted_ptoni_scores") or st.session_state.get("ptoni_manual_mode"))
     if not _ptoni_ready:
         st.info("Upload the P-TONI score sheet image in the drop zone above -- scores will auto-fill here.")
@@ -2189,7 +2189,7 @@ No composite score was obtained on the {cog_label}. {cog_scores.get('reason','')
 
     return f"""You are a licensed clinical psychologist writing a formal Psychological Autism Spectrum Disorder Evaluation report.
 Match this EXACT style: third person, formal clinical language, patient referred to by first name throughout.
-IMPORTANT: Never use em dashes (—) anywhere in your response. Use commas, semicolons, or rewrite sentences instead.
+IMPORTANT: Never use em dashes (-) anywhere in your response. Use commas, semicolons, or rewrite sentences instead.
 
 Write ONLY the following three sections. The other sections have already been generated.
 Use the name "{patient_name or '[PATIENT]'}" throughout.
@@ -2787,7 +2787,7 @@ def _vineland_abc_table(doc):
     doc.add_paragraph()
 
 def _vineland_qualitative_table(doc):
-    """2-column Vineland Qualitative Descriptors — patient row bolded."""
+    """2-column Vineland Qualitative Descriptors - patient row bolded."""
     abc_score = vineland_data.get("abc", 0) if vineland_data else 0
     levels = [
         ("High",            "130-140", lambda s: s >= 130),
