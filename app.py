@@ -164,20 +164,52 @@ def check_password():
 check_password()
 
 # ══════════════════════════════════════════════════════════════════════
-# AUTO-SAVE / RESTORE  (per-clinician, indefinite)
+# AUTO-SAVE / RESTORE  (per-clinician + per-patient, indefinite)
 # ══════════════════════════════════════════════════════════════════════
 _SAVE_DIR = pathlib.Path(__file__).parent
 
 _SKIP_KEYS = {
-    "authenticated", "autosave_loaded", "_pending_restore",
+    "authenticated", "autosave_loaded", "_pending_restore", "patient_selected",
     "bg_mic", "bg_upload", "obs_mic_input",  # file/audio widgets (not serializable)
 }
 
-def _autosave_path():
-    """Return a per-clinician save file path based on logged-in username."""
+def _safe_username():
     username = st.session_state.get("username", "shared")
-    safe = "".join(c for c in username.lower() if c.isalnum() or c in "-_")[:24] or "shared"
-    return _SAVE_DIR / f".rimon_save_{safe}.json"
+    return "".join(c for c in username.lower() if c.isalnum() or c in "-_")[:24] or "shared"
+
+def _safe_patient():
+    p = st.session_state.get("patient_name_input", "").strip()
+    if not p:
+        return ""
+    return "".join(c for c in p.lower().replace(" ", "_") if c.isalnum() or c in "-_")[:20]
+
+def _autosave_path():
+    """Return a per-clinician, per-patient save file path."""
+    su = _safe_username()
+    sp = _safe_patient()
+    if sp:
+        return _SAVE_DIR / f".rimon_save_{su}_{sp}.json"
+    return _SAVE_DIR / f".rimon_save_{su}_new.json"
+
+def _list_patient_saves():
+    """Return list of (display_name, saved_at, path) for this clinician's patient saves."""
+    su = _safe_username()
+    results = []
+    for _p in sorted(_SAVE_DIR.glob(f".rimon_save_{su}_*.json"),
+                     key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            _d = json.loads(_p.read_text())
+            _display = _d.get("patient_name_input", "").strip()
+            if not _display:
+                # derive from filename
+                _stem = _p.stem  # e.g. .rimon_save_daniella_mckenzie
+                _display = _stem.replace(f".rimon_save_{su}_", "").replace("_", " ").title()
+            _display = _display or "Unknown"
+            _at = _d.get("_saved_at", "")
+            results.append((_display, _at, _p, _d))
+        except Exception:
+            pass
+    return results
 
 def _autosave():
     """Serialize session_state to JSON on every rerun."""
@@ -195,48 +227,52 @@ def _autosave():
     except Exception:
         pass
 
-# On a brand-new browser session, check for a saved draft for this clinician
-if "autosave_loaded" not in st.session_state:
-    st.session_state["autosave_loaded"] = True
-    _p = _autosave_path()
-    if _p.exists():
-        try:
-            _saved = json.loads(_p.read_text())
-            # No expiry — sessions are kept indefinitely per clinician
-            st.session_state["_pending_restore"] = _saved
-        except Exception:
-            pass
+# ── PATIENT PICKER ────────────────────────────────────────────────────
+# Shown once per login session, before the main form.
+# Once a patient is selected (or "Start New" chosen), patient_selected=True
+# and the picker is skipped on subsequent reruns.
+if not st.session_state.get("patient_selected"):
+    _saves = _list_patient_saves()
+    if _saves:
+        st.markdown("### Welcome back!")
+        st.markdown(f"**{st.session_state.get('username', '')}** — pick up where you left off, or start a new patient.")
+        st.divider()
+        for _disp, _at, _path, _data in _saves:
+            _col_a, _col_b, _col_c = st.columns([4, 2, 1])
+            with _col_a:
+                st.markdown(f"**{_disp}**")
+            with _col_b:
+                st.caption(_at)
+            with _col_c:
+                if st.button("Resume", key=f"_resume_{_path.stem}"):
+                    for _k, _v in _data.items():
+                        if not _k.startswith("_") and _k not in _SKIP_KEYS:
+                            st.session_state[_k] = _v
+                    st.session_state["patient_selected"] = True
+                    st.session_state["autosave_loaded"] = True
+                    st.rerun()
+        st.divider()
+        if st.button("Start a New Patient", type="primary", key="_new_patient_btn"):
+            st.session_state["patient_selected"] = True
+            st.session_state["autosave_loaded"] = True
+            st.rerun()
+        st.stop()
+    else:
+        # No saves yet — skip straight to form
+        st.session_state["patient_selected"] = True
+        st.session_state["autosave_loaded"] = True
 
-# Restore banner — shown at top of every page until resolved
-if st.session_state.get("_pending_restore"):
-    _saved = st.session_state["_pending_restore"]
-    _saved_at_display = _saved.get("_saved_at", "unknown time")
-    _uname_display = st.session_state.get("username", "")
-    _banner = st.container()
-    with _banner:
-        st.warning(
-            f"⚠️ **Previous session found**{' for ' + _uname_display if _uname_display else ''} "
-            f"— last saved {_saved_at_display}. Resume where you left off?",
-            icon="💾",
-        )
-        _rc1, _rc2, _rc3 = st.columns([2, 1, 1])
-        with _rc2:
-            if st.button("▶ Resume Session", type="primary", key="_restore_btn"):
-                for _k, _v in _saved.items():
-                    if not _k.startswith("_") and _k not in _SKIP_KEYS:
-                        st.session_state[_k] = _v
-                del st.session_state["_pending_restore"]
-                st.rerun()
-        with _rc3:
-            if st.button("✕ Start Fresh", key="_discard_btn"):
-                del st.session_state["_pending_restore"]
-                try:
-                    _autosave_path().unlink()
-                except Exception:
-                    pass
-                st.rerun()
+# ── FILE MIGRATION ────────────────────────────────────────────────────
+# If clinician just entered a patient name and a _new save exists, migrate it.
+_new_path = _SAVE_DIR / f".rimon_save_{_safe_username()}_new.json"
+_pat_path  = _autosave_path()
+if _new_path.exists() and _pat_path != _new_path and not _pat_path.exists():
+    try:
+        _new_path.rename(_pat_path)
+    except Exception:
+        pass
 
-# Run autosave every rerun (after restore check so restored data gets saved immediately)
+# Run autosave every rerun
 _autosave()
 
 # ══════════════════════════════════════════════════════════════════════
@@ -996,7 +1032,7 @@ st.info("Use first name or initials only. No last name, no full DOB.")
 
 col1, col2 = st.columns(2)
 with col1:
-    patient_name    = st.text_input("Patient First Name / Initials", placeholder="e.g. M.B. or Mckenzie")
+    patient_name    = st.text_input("Patient First Name / Initials", placeholder="e.g. M.B. or Mckenzie", key="patient_name_input")
     dob_text        = st.text_input("Date of Birth (year only for HIPAA)", placeholder="e.g. 2020")
     chron_age       = st.text_input("Chronological Age", placeholder="e.g. 5 years, 3 months")
     eval_date       = st.date_input("Date of Evaluation", value=datetime.today())
@@ -1476,6 +1512,11 @@ if bulk_files:
                         for k, v in scores.items():
                             remapped[_cog_key_remap.get(k, k)] = v
                         st.session_state["extracted_cog_scores"] = remapped
+                        # Store separate keys for C-TONI and P-TONI so their sections can gate independently
+                        if context == "C-TONI-2":
+                            st.session_state["extracted_ctoni_scores"] = scores
+                        elif context == "P-TONI":
+                            st.session_state["extracted_ptoni_scores"] = scores
                         # Auto-check the right cognitive battery via pending flags
                         for _b, _ctx in [("wppsi","WPPSI-IV"),("wisc","WISC-V"),("wais","WAIS-V"),("ctoni","C-TONI-2"),("ptoni","P-TONI")]:
                             if context == _ctx:
@@ -1497,7 +1538,7 @@ if _bulk_cache:
             st.success(f"**{entry['fname']}** — {n} scores loaded", icon="✅")
     if st.button("Clear uploads and start fresh", key="bulk_clear"):
         st.session_state["bulk_extracted"] = {}
-        for k in ["extracted_cog_scores","extracted_basc_scores","extracted_vin_scores","extracted_ados_scores"]:
+        for k in ["extracted_cog_scores","extracted_basc_scores","extracted_vin_scores","extracted_ados_scores","extracted_ctoni_scores","extracted_ptoni_scores"]:
             st.session_state.pop(k, None)
         st.rerun()
 
@@ -1510,20 +1551,25 @@ use_wais = use_wais if 'use_wais' in dir() else False  # guard for rerun order
 if use_wppsi or use_wisc or use_wais:
     cog_label = "WPPSI-IV" if use_wppsi else ("WISC-V" if use_wisc else "WAIS-V")
     st.subheader(f"Cognitive Assessment - {cog_label}")
-
     _cog = st.session_state.get("extracted_cog_scores", {})
+    _cog_ready = bool(_cog or st.session_state.get("cog_manual_mode", False))
+    if not _cog_ready:
+        st.info(f"Upload the {cog_label} score sheet in the drop zone above — scores will auto-fill here.")
+        if st.button("Enter scores manually instead", key="cog_manual_btn"):
+            st.session_state["cog_manual_mode"] = True
+            st.rerun()
+    if _cog_ready:
+        nonverbal_mode = st.checkbox("Non-verbal / Underresponsive patient (use estimated subtest template)", value=False, key="cog_nonverbal")
+    cog_scores["nonverbal_mode"] = st.session_state.get("cog_nonverbal", False)
 
-    nonverbal_mode = st.checkbox("Non-verbal / Underresponsive patient (use estimated subtest template)", value=False, key="cog_nonverbal")
-    cog_scores["nonverbal_mode"] = nonverbal_mode
-
-    obtained = st.radio("Were scores obtained?", ["Yes - full battery administered", "No - unable to obtain scores"], horizontal=True)
-    if "No" in obtained:
+    obtained = st.radio("Were scores obtained?", ["Yes - full battery administered", "No - unable to obtain scores"], horizontal=True) if _cog_ready else "Yes - full battery administered"
+    if _cog_ready and "No" in obtained:
         cog_not_obtained_reason = st.text_area("Reason scores not obtained",
             placeholder="e.g. Patient was unable to sustain attention and participate during this evaluation. Patient often uttered nonsense words to herself and provided no responses to any questions.",
             height=80)
         cog_scores["obtained"] = False
         cog_scores["reason"]   = cog_not_obtained_reason
-    else:
+    elif _cog_ready:
         cog_scores["obtained"] = True
         if nonverbal_mode:
             st.caption("Non-verbal mode: subtest-level scaled scores (1-19). Composite scores defaulted to floor (<70).")
@@ -1594,9 +1640,16 @@ if use_wppsi or use_wisc or use_wais:
 basc_data = {}
 if use_basc:
     st.subheader("BASC-3 - Behavior Assessment System for Children (Parent Rating Scales)")
-
     _basc = st.session_state.get("extracted_basc_scores", {})
+    _basc_ready = bool(_basc or st.session_state.get("basc_manual_mode", False))
+    if not _basc_ready:
+        st.info("Upload the BASC-3 Q-Global DOCX in the drop zone above — scores will auto-fill here.")
+        if st.button("Enter scores manually instead", key="basc_manual_btn"):
+            st.session_state["basc_manual_mode"] = True
+            st.rerun()
 
+if use_basc and (st.session_state.get("extracted_basc_scores") or st.session_state.get("basc_manual_mode")):
+    _basc = st.session_state.get("extracted_basc_scores", {})
     b_respondent = st.text_input("Respondent name (parent/caregiver)", placeholder="e.g. Thangiere P. Burns")
     b_form = st.selectbox("Form version", ["Preschool (ages 2-5)","Child (ages 6-11)","Adolescent (ages 12-21)"])
 
@@ -1672,7 +1725,14 @@ if use_basc:
 vineland_data = {}
 if use_vineland:
     st.subheader("Vineland-3 - Adaptive Behavior Scales")
+    _vin_ready = bool(st.session_state.get("extracted_vin_scores") or st.session_state.get("vineland_manual_mode"))
+    if not _vin_ready:
+        st.info("Upload the Vineland-3 Q-Global DOCX in the drop zone above -- scores will auto-fill here.")
+        if st.button("Enter scores manually instead", key="vineland_manual_btn"):
+            st.session_state["vineland_manual_mode"] = True
+            st.rerun()
 
+if use_vineland and (st.session_state.get("extracted_vin_scores") or st.session_state.get("vineland_manual_mode")):
     _vin = st.session_state.get("extracted_vin_scores", {})
 
     col1, col2 = st.columns(2)
@@ -1702,13 +1762,12 @@ if use_vineland:
     }
 
     # OPWDD eligibility check
-    if use_ados or True:
-        if vin_abc <= 70:
-            st.error(f"ABC = {vin_abc} ≤ 70 - Meets adaptive deficit criterion for OPWDD / IDD eligibility")
-        elif vin_abc <= 85:
-            st.warning(f"ABC = {vin_abc} - Moderately Low range (below average but above IDD threshold)")
-        else:
-            st.success(f"ABC = {vin_abc} - Within or above average adaptive range")
+    if vin_abc <= 70:
+        st.error(f"ABC = {vin_abc} <= 70 - Meets adaptive deficit criterion for OPWDD / IDD eligibility")
+    elif vin_abc <= 85:
+        st.warning(f"ABC = {vin_abc} - Moderately Low range (below average but above IDD threshold)")
+    else:
+        st.success(f"ABC = {vin_abc} - Within or above average adaptive range")
 
     st.divider()
 
@@ -1718,7 +1777,14 @@ if use_vineland:
 ados_data = {}
 if use_ados:
     st.subheader("ADOS-2 - Autism Diagnostic Observation Schedule")
+    _ados_ready = bool(st.session_state.get("extracted_ados_scores") or st.session_state.get("ados_manual_mode"))
+    if not _ados_ready:
+        st.info("Upload the ADOS-2 score sheet in the drop zone above, or enter scores manually.")
+        if st.button("Enter scores manually", key="ados_manual_btn"):
+            st.session_state["ados_manual_mode"] = True
+            st.rerun()
 
+if use_ados and (st.session_state.get("extracted_ados_scores") or st.session_state.get("ados_manual_mode")):
     _ados = st.session_state.get("extracted_ados_scores", {})
 
     col1, col2 = st.columns(2)
@@ -1804,28 +1870,31 @@ if use_ados:
 # BLOCK 6e - C-TONI-2
 # ══════════════════════════════════════════════════════════════════════
 ctoni_data = {}
+
+def _ctoni_classification(ss):
+    if ss >= 130: return "Very Superior"
+    elif ss >= 120: return "Superior"
+    elif ss >= 111: return "Above Average"
+    elif ss >= 90: return "Average"
+    elif ss >= 80: return "Below Average"
+    elif ss >= 70: return "Poor"
+    else: return "Very Poor"
+
+def _ctoni_subtest_class(scaled):
+    if scaled <= 7: return "Below Average"
+    elif scaled <= 12: return "Average"
+    else: return "Above Average"
+
 if use_ctoni:
     st.subheader("C-TONI-2 — Comprehensive Test of Nonverbal Intelligence")
+    _ctoni_ready = bool(st.session_state.get("extracted_ctoni_scores") or st.session_state.get("ctoni_manual_mode"))
+    if not _ctoni_ready:
+        st.info("Upload the C-TONI-2 score sheet image in the drop zone above -- scores will auto-fill here.")
+        if st.button("Enter scores manually instead", key="ctoni_manual_btn"):
+            st.session_state["ctoni_manual_mode"] = True
+            st.rerun()
 
-    def _ctoni_classification(ss):
-        if ss >= 130: return "Very Superior"
-        elif ss >= 120: return "Superior"
-        elif ss >= 111: return "Above Average"
-        elif ss >= 90: return "Average"
-        elif ss >= 80: return "Below Average"
-        elif ss >= 70: return "Poor"
-        else: return "Very Poor"
-
-    def _ctoni_subtest_class(scaled):
-        if scaled <= 7: return "Below Average"
-        elif scaled <= 12: return "Average"
-        else: return "Above Average"
-
-    _ctoni_has_data = bool(st.session_state.get("ctoni_fsiq_ss") or st.session_state.get("ctoni_pic_ss"))
-
-    with st.expander("📷  Upload Score Sheet", expanded=not bool(_ctoni_has_data)):
-        st.info("Manual entry below.")
-
+if use_ctoni and (st.session_state.get("extracted_ctoni_scores") or st.session_state.get("ctoni_manual_mode")):
     st.caption("Composite scores (Standard Score: mean=100, SD=15)")
     ctoni_col1, ctoni_col2 = st.columns(2)
     with ctoni_col1:
@@ -1887,18 +1956,26 @@ if use_ctoni:
 # BLOCK 6f - P-TONI
 # ══════════════════════════════════════════════════════════════════════
 ptoni_data = {}
+
+def _ptoni_classification(ss):
+    if ss >= 130: return "Very Superior"
+    elif ss >= 120: return "Superior"
+    elif ss >= 111: return "Above Average"
+    elif ss >= 90: return "Average"
+    elif ss >= 80: return "Below Average"
+    elif ss >= 70: return "Poor"
+    else: return "Very Poor"
+
 if use_ptoni:
     st.subheader("P-TONI — Primary Test of Nonverbal Intelligence")
+    _ptoni_ready = bool(st.session_state.get("extracted_ptoni_scores") or st.session_state.get("ptoni_manual_mode"))
+    if not _ptoni_ready:
+        st.info("Upload the P-TONI score sheet image in the drop zone above -- scores will auto-fill here.")
+        if st.button("Enter scores manually instead", key="ptoni_manual_btn"):
+            st.session_state["ptoni_manual_mode"] = True
+            st.rerun()
 
-    def _ptoni_classification(ss):
-        if ss >= 130: return "Very Superior"
-        elif ss >= 120: return "Superior"
-        elif ss >= 111: return "Above Average"
-        elif ss >= 90: return "Average"
-        elif ss >= 80: return "Below Average"
-        elif ss >= 70: return "Poor"
-        else: return "Very Poor"
-
+if use_ptoni and (st.session_state.get("extracted_ptoni_scores") or st.session_state.get("ptoni_manual_mode")):
     ptoni_fsiq_ss = st.number_input("Full Scale IQ Standard Score", 40, 160, 85, key="ptoni_fsiq_ss")
     ptoni_fsiq_pct = st.number_input("Percentile", 0, 99, 16, key="ptoni_fsiq_pct")
     ptoni_age_equiv = st.text_input("Age Equivalent (e.g. 4:6)", value="4:6", key="ptoni_age_equiv")

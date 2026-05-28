@@ -228,6 +228,7 @@
 | 2026-05-25 | Added WAIS-V (non-verbal mode, adult 16-90yr). Updated battery to Fifth Edition (VCI/VSI/FRI/WMI/PSI). Added C-TONI-2 block. Added P-TONI block. Updated WAIS narrative to match clinical template exactly (adult language, vocational framing, concluding paragraph). Updated CLAUDE.md. |
 | 2026-05-25 | Clinician feedback fixes: (1) Auto-save session to .rimon_autosave.json on every rerun; restore banner on reload. (2) Multi-clip audio recording — each clip appends to segment list, combined transcript feeds extraction. (3) Auto-switch to Manual Entry tab after upload/extraction via tab reorder + st.rerun(). (4) Removed all em-dashes from app and report output — strip_emdashes() now handles spaced/bare em+en-dash, HTML entities; applied to all AI outputs. |
 | 2026-05-28 | Clinician feedback: (1) Per-clinician indefinite save — login now collects username; autosave keyed to .rimon_save_{username}.json; no expiry. (2) Recording segments persist across sessions via autosave (already JSON-serializable). (3) Confirmed battery split: BASC-3 + Vineland-3 keep Q-Global DOCX; WPPSI-IV/WISC-V/WAIS-V/C-TONI-2/P-TONI use image/PDF upload; ADOS-2 pending Dr. Kirby confirmation. (4) Improved cognitive extraction prompts in app_preview.py — WPPSI/WISC/WAIS-specific prompts return standardized keys (VCI/VSI/FRI/WMI/PSI/FSIQ); filename-based battery detection; null filtering. |
+| 2026-05-28 | Point 6 complete — all 6 battery sections now gated: WPPSI/WISC/WAIS/BASC/Vineland/ADOS/C-TONI/P-TONI fields only appear after file upload + extraction OR manual-entry bypass button. Split-block pattern applied to all. Patient ID-based save — autosave now keyed to .rimon_save_{username}_{patient}.json; patient picker shown at login if previous sessions exist; file migration when patient name first entered; recordings auto-persist per patient. All 6 features confirmed done. |
 
 ---
 
@@ -240,9 +241,11 @@
 - **DOCX generation** — python-docx; `_shd_cell`, `_add_body`, `_add_subheading` helpers; all tables use Times New Roman 8pt
 - **Key helpers** — `ordinal(n)`, `ss_to_pct()`, `ss_to_label()`, `_ados_int()`, `strip_emdashes()`
 - **Session state guard** — `use_wais = use_wais if 'use_wais' in dir() else False` prevents NameError on rerun before checkbox renders
-- **Auto-save** — `_autosave()` runs top of every rerun; save file keyed per clinician: `.rimon_save_{username}.json`; no expiry — data kept indefinitely; restore banner on fresh login
+- **Auto-save** — `_autosave()` runs every rerun; keyed per clinician + patient: `.rimon_save_{username}_{patient}.json`; falls back to `_new.json` until patient name entered; migrates on first name entry; no expiry
+- **Patient picker** — shown at login if prior saves exist; lists each patient + timestamp + Resume button; "Start New Patient" skips to blank form; `patient_selected` flag prevents re-showing on reruns
 - **Tab auto-switch** — tabs reorder on extract: `if _data: manual, upload = st.tabs(...)` so Manual Entry is active tab after extraction
-- **Multi-clip audio** — `recording_segments` list in session state; each clip appended, combined transcript joins all segments; per-clip delete + clear all
+- **Multi-clip audio** — `recording_segments` list in session state; each clip appended, combined transcript joins all segments; per-clip delete + clear all; persists per patient via autosave
+- **Battery gating** — all battery sections (WPPSI/WISC/WAIS/BASC/Vineland/ADOS/C-TONI/P-TONI) hidden until file uploaded + extracted; "Enter manually" bypass on each; split-block pattern (heading block + form block as separate top-level `if` statements)
 
 ---
 
