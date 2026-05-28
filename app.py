@@ -170,7 +170,8 @@ _SAVE_DIR = pathlib.Path(__file__).parent
 
 _SKIP_KEYS = {
     "authenticated", "autosave_loaded", "_pending_restore", "patient_selected",
-    "bg_mic", "bg_upload", "obs_mic_input",  # file/audio widgets (not serializable)
+    # file uploader + audio widgets — Streamlit forbids pre-setting these via session_state
+    "bg_mic", "bg_upload", "obs_mic_input", "obs_upload", "bulk_score_upload",
 }
 
 def _safe_username():
