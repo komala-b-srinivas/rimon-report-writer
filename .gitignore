@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 *.pptx
 .DS_Store
+.streamlit/secrets.toml
+.rimon_save_*.json
+rimon-research/

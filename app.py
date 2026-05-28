@@ -11,7 +11,7 @@ from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-import os, json, base64, io, smtplib, subprocess, tempfile
+import os, json, base64, io, smtplib, subprocess, tempfile, pathlib, datetime, hashlib
 import fitz  # pymupdf
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -134,23 +134,110 @@ def check_password():
             <img src="https://static.wixstatic.com/media/022991_02a105832a4745979b94f16debb093a8~mv2.png" />
             <h1>Report Writer</h1>
             <div class="divider"></div>
-            <p>Enter your access password to continue</p>
+            <p>Enter your name and access password to continue</p>
         </div>
         """, unsafe_allow_html=True)
 
-        pw = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Enter password")
+        uname = st.text_input("Your name", label_visibility="collapsed", placeholder="Your name (e.g. Daniella)")
+        pw = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Password")
         if st.button("Login", use_container_width=True):
-            correct = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", ""))
-            if pw == correct:
-                st.session_state.authenticated = True
-                st.rerun()
+            if not uname.strip():
+                st.error("Please enter your name.")
             else:
-                st.error("Incorrect password. Please try again.")
+                # Per-clinician password lookup — key is lowercase first name
+                _safe_key = "".join(c for c in uname.strip().lower() if c.isalnum())[:24]
+                try:
+                    _cli_passwords = dict(st.secrets["clinician_passwords"])
+                except Exception:
+                    _cli_passwords = {}
+                _correct = _cli_passwords.get(_safe_key, "") or _cli_passwords.get(uname.strip().lower(), "")
+                if _correct and pw == _correct:
+                    st.session_state.authenticated = True
+                    st.session_state["username"] = uname.strip()
+                    st.rerun()
+                else:
+                    st.error("Incorrect name or password. Please try again.")
 
         st.markdown('<div class="login-footer">RIMON HEALTH - INTERNAL USE ONLY</div>', unsafe_allow_html=True)
         st.stop()
 
 check_password()
+
+# ══════════════════════════════════════════════════════════════════════
+# AUTO-SAVE / RESTORE  (per-clinician, indefinite)
+# ══════════════════════════════════════════════════════════════════════
+_SAVE_DIR = pathlib.Path(__file__).parent
+
+_SKIP_KEYS = {
+    "authenticated", "autosave_loaded", "_pending_restore",
+    "bg_mic", "bg_upload", "obs_mic_input",  # file/audio widgets (not serializable)
+}
+
+def _autosave_path():
+    """Return a per-clinician save file path based on logged-in username."""
+    username = st.session_state.get("username", "shared")
+    safe = "".join(c for c in username.lower() if c.isalnum() or c in "-_")[:24] or "shared"
+    return _SAVE_DIR / f".rimon_save_{safe}.json"
+
+def _autosave():
+    """Serialize session_state to JSON on every rerun."""
+    data = {"_saved_at": datetime.now().isoformat(timespec="seconds")}
+    for k, v in st.session_state.items():
+        if k in _SKIP_KEYS or k.startswith("FormSubmitter") or k.startswith("_"):
+            continue
+        try:
+            json.dumps(v)
+            data[k] = v
+        except (TypeError, ValueError):
+            pass
+    try:
+        _autosave_path().write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+
+# On a brand-new browser session, check for a saved draft for this clinician
+if "autosave_loaded" not in st.session_state:
+    st.session_state["autosave_loaded"] = True
+    _p = _autosave_path()
+    if _p.exists():
+        try:
+            _saved = json.loads(_p.read_text())
+            # No expiry — sessions are kept indefinitely per clinician
+            st.session_state["_pending_restore"] = _saved
+        except Exception:
+            pass
+
+# Restore banner — shown at top of every page until resolved
+if st.session_state.get("_pending_restore"):
+    _saved = st.session_state["_pending_restore"]
+    _saved_at_display = _saved.get("_saved_at", "unknown time")
+    _uname_display = st.session_state.get("username", "")
+    _banner = st.container()
+    with _banner:
+        st.warning(
+            f"⚠️ **Previous session found**{' for ' + _uname_display if _uname_display else ''} "
+            f"— last saved {_saved_at_display}. Resume where you left off?",
+            icon="💾",
+        )
+        _rc1, _rc2, _rc3 = st.columns([2, 1, 1])
+        with _rc2:
+            if st.button("▶ Resume Session", type="primary", key="_restore_btn"):
+                for _k, _v in _saved.items():
+                    if not _k.startswith("_") and _k not in _SKIP_KEYS:
+                        st.session_state[_k] = _v
+                del st.session_state["_pending_restore"]
+                st.rerun()
+        with _rc3:
+            if st.button("✕ Start Fresh", key="_discard_btn"):
+                del st.session_state["_pending_restore"]
+                try:
+                    _autosave_path().unlink()
+                except Exception:
+                    pass
+                st.rerun()
+
+# Run autosave every rerun (after restore check so restored data gets saved immediately)
+_autosave()
 
 # ══════════════════════════════════════════════════════════════════════
 # SCORE HELPERS
@@ -293,8 +380,16 @@ BASC3_INTERP = {
 }
 
 def strip_emdashes(text: str) -> str:
-    """Replace em dashes with a comma. Handles unicode and HTML variants."""
-    return text.replace("—", ",").replace("&mdash;", ",").replace("&#8212;", ",").replace("—", ",")
+    """Remove all em-dashes and en-dashes from text.
+    Spaced variants ( — ) become ', '; bare variants become a hyphen."""
+    # HTML/unicode entities
+    for ent in ("&mdash;", "&#8212;", "&ndash;", "&#8211;"):
+        text = text.replace(ent, "-")
+    # Spaced em/en-dash → comma-space so sentences stay readable
+    text = text.replace(" — ", ", ").replace(" – ", ", ")
+    # Bare em/en-dash → hyphen
+    text = text.replace("—", "-").replace("–", "-")
+    return text
 
 
 def generate_basc3_narrative(data, patient_name, respondent_name):
@@ -637,6 +732,20 @@ Return ONLY valid JSON using EXACTLY these key names (use null if not visible):
   "notes": "any issues"
 }
 Return ONLY JSON. Use null for any score not visible."""
+    elif any(x in context for x in ("WPPSI", "WISC", "WAIS", "C-TONI", "P-TONI")):
+        if "WPPSI" in context:   battery_name = "WPPSI-IV"
+        elif "WISC" in context:  battery_name = "WISC-V"
+        elif "WAIS" in context:  battery_name = "WAIS-V"
+        elif "C-TONI" in context:battery_name = "C-TONI-2"
+        else:                    battery_name = "P-TONI"
+        prompt = f"""Read this {battery_name} psychological score sheet image carefully.
+Extract the composite index scores: VCI (Verbal Comprehension Index), VSI (Visual Spatial Index),
+FRI (Fluid Reasoning Index), WMI (Working Memory Index), PSI (Processing Speed Index),
+FSIQ (Full Scale IQ), NVI (Nonverbal Index), GAI (General Ability Index).
+These are typically 2-3 digit numbers (40-160) in a summary or composite score table.
+Return ONLY valid JSON using EXACTLY these key names:
+{{"test_battery":"{battery_name}","scores":{{"VCI":number_or_null,"VSI":number_or_null,"FRI":number_or_null,"WMI":number_or_null,"PSI":number_or_null,"FSIQ":number_or_null,"NVI":number_or_null,"GAI":number_or_null}},"notes":""}}
+Use null for any score not visible. Do not invent values."""
     else:
         prompt = f"""You are reading a neuropsychological score sheet from a {context} evaluation.
 Extract ALL numerical scores visible. Return ONLY valid JSON:
@@ -675,10 +784,10 @@ def extract_obs_from_image(image_bytes):
         ]}],
         temperature=0.2, max_tokens=1024,
     )
-    return resp.choices[0].message.content.strip()
+    return strip_emdashes(resp.choices[0].message.content.strip())
 
 # ══════════════════════════════════════════════════════════════════════
-# Q-GLOBAL DOCX PARSERS  (deterministic — no LLM needed)
+# Q-GLOBAL DOCX PARSERS  (deterministic, no LLM needed)
 # ══════════════════════════════════════════════════════════════════════
 import re as _re
 
@@ -930,17 +1039,25 @@ st.divider()
 # ══════════════════════════════════════════════════════════════════════
 # BLOCK 3 - TESTS ADMINISTERED
 # ══════════════════════════════════════════════════════════════════════
+# Apply any pending auto-detections from bulk upload (must run before widgets render)
+for _bat in ["wppsi","wisc","wais","ados","ctoni","ptoni","basc","vineland"]:
+    _pkey = f"_pending_use_{_bat}"
+    if st.session_state.get(_pkey):
+        st.session_state[f"use_{_bat}"] = True
+        del st.session_state[_pkey]
+
 st.subheader("Evaluation Materials")
 col1, col2 = st.columns(2)
 with col1:
-    use_wppsi   = st.checkbox("WPPSI-IV (Cognitive)", value=True)
-    use_wisc    = st.checkbox("WISC-V (Cognitive - if age 6+)")
-    use_ados    = st.checkbox("ADOS-2", value=True)
-    use_ctoni   = st.checkbox("C-TONI-2 (Non-verbal IQ)")
-    use_ptoni   = st.checkbox("P-TONI (Non-verbal IQ - ages 3-9)")
+    use_wppsi   = st.checkbox("WPPSI-IV (Cognitive)",              value=st.session_state.get("use_wppsi", False),  key="use_wppsi")
+    use_wisc    = st.checkbox("WISC-V (Cognitive - ages 6-16)",   value=st.session_state.get("use_wisc", False),  key="use_wisc")
+    use_wais    = st.checkbox("WAIS-V (Cognitive - adults 16+)",  value=st.session_state.get("use_wais", False),  key="use_wais")
+    use_ados    = st.checkbox("ADOS-2",                            value=st.session_state.get("use_ados", False),  key="use_ados")
+    use_ctoni   = st.checkbox("C-TONI-2 (Non-verbal IQ)",         value=st.session_state.get("use_ctoni", False), key="use_ctoni")
+    use_ptoni   = st.checkbox("P-TONI (Non-verbal IQ - ages 3-9)",value=st.session_state.get("use_ptoni", False), key="use_ptoni")
 with col2:
-    use_basc    = st.checkbox("BASC-3 PRS (Behavior - Parent Rating)", value=True)
-    use_vineland= st.checkbox("Vineland-3 (Adaptive Behavior - Parent)", value=True)
+    use_basc    = st.checkbox("BASC-3 PRS (Behavior - Parent Rating)",   value=st.session_state.get("use_basc", False),    key="use_basc")
+    use_vineland= st.checkbox("Vineland-3 (Adaptive Behavior - Parent)", value=st.session_state.get("use_vineland", False),key="use_vineland")
     use_case    = st.checkbox("Case Materials / Records Review", value=True)
 extra_tests = st.text_input("Other tests (comma-separated)", placeholder="e.g. CARS-2, SRS-2")
 st.divider()
@@ -956,24 +1073,42 @@ with st.expander("Record or Upload Session Audio to Auto-Fill Fields", expanded=
     st.caption("Record or upload the intake session. AI will transcribe it and extract all background fields automatically.")
     bg_input_mode = st.radio("Input method", ["Record in-app", "Upload audio file", "Paste transcript"], horizontal=True, key="bg_input_mode")
 
+    # ── segment list — persists across recordings ──────────────────────
+    if "recording_segments" not in st.session_state:
+        st.session_state["recording_segments"] = []  # list of {"label": str, "text": str}
+
+    def _rebuild_combined():
+        segs = st.session_state.get("recording_segments", [])
+        st.session_state["transcript"] = "\n\n".join(s["text"] for s in segs)
+        st.session_state["transcript_mode"] = "raw"
+
+    def _append_segment(text, label):
+        st.session_state["recording_segments"].append({"label": label, "text": text})
+        _rebuild_combined()
+
     if bg_input_mode == "Record in-app":
-        bg_mic = st.audio_input("Record session", key="bg_mic")
+        bg_mic = st.audio_input("Record a clip (record → stop → add below)", key="bg_mic")
         if bg_mic:
-            # Read bytes once and reuse
             audio_bytes = bg_mic.read()
+            audio_hash  = hashlib.md5(audio_bytes).hexdigest()
+            if "last_mic_hash" not in st.session_state:
+                st.session_state["last_mic_hash"] = ""
+            is_new_clip = (audio_hash != st.session_state["last_mic_hash"])
+
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.button("Transcribe", type="primary", key="bg_mic_btn"):
-                    with st.spinner("Transcribing..."):
+                if st.button("Add Clip (Transcribe)", type="primary", key="bg_mic_btn", disabled=not is_new_clip):
+                    with st.spinner("Transcribing clip..."):
                         try:
                             t = transcribe_audio(audio_bytes, "session.wav")
-                            st.session_state["transcript"] = t
-                            st.session_state["transcript_mode"] = "raw"
-                            st.success("Transcribed.")
+                            n = len(st.session_state["recording_segments"]) + 1
+                            _append_segment(t, f"Clip {n}")
+                            st.session_state["last_mic_hash"] = audio_hash
+                            st.success(f"Clip {n} added. Record another or Extract below.")
                         except Exception as e:
                             st.error(f"Failed: {e}")
             with col_b:
-                if st.button("Transcribe + Convert to Clinical Language", key="bg_mic_clinical_btn"):
+                if st.button("Add Clip + Convert to Clinical Language", key="bg_mic_clinical_btn", disabled=not is_new_clip):
                     with st.spinner("Transcribing and converting..."):
                         try:
                             t = transcribe_audio(audio_bytes, "session.wav")
@@ -989,29 +1124,31 @@ Recording transcript: {t}"""
                                 temperature=0.2, max_tokens=2048,
                             )
                             clinical_text = strip_emdashes(resp.choices[0].message.content.strip())
-                            st.session_state["transcript"] = clinical_text
+                            n = len(st.session_state["recording_segments"]) + 1
+                            _append_segment(clinical_text, f"Clip {n} (clinical)")
+                            st.session_state["last_mic_hash"] = audio_hash
                             st.session_state["transcript_mode"] = "clinical"
-                            st.success("Converted to clinical language.")
+                            st.success(f"Clip {n} added in clinical language.")
                         except Exception as e:
                             st.error(f"Failed: {e}")
 
     elif bg_input_mode == "Upload audio file":
         af = st.file_uploader("Session recording", type=["mp3","mp4","m4a","wav","webm"], key="bg_upload")
         if af:
-            af_bytes = af.read()  # Read once, reuse in both buttons
+            af_bytes = af.read()
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.button("Transcribe", type="primary", key="bg_upload_btn"):
+                if st.button("Add File (Transcribe)", type="primary", key="bg_upload_btn"):
                     with st.spinner("Transcribing..."):
                         try:
                             t = transcribe_audio(af_bytes, af.name)
-                            st.session_state["transcript"] = t
-                            st.session_state["transcript_mode"] = "raw"
-                            st.success("Transcribed. Click Extract below.")
+                            n = len(st.session_state["recording_segments"]) + 1
+                            _append_segment(t, f"File {n}: {af.name}")
+                            st.success("Added. Upload another file or Extract below.")
                         except Exception as e:
                             st.error(f"Failed: {e}")
             with col_b:
-                if st.button("Transcribe + Convert to Clinical Language", key="bg_upload_clinical_btn"):
+                if st.button("Add File + Convert to Clinical Language", key="bg_upload_clinical_btn"):
                     with st.spinner("Transcribing and converting..."):
                         try:
                             t = transcribe_audio(af_bytes, af.name)
@@ -1027,7 +1164,8 @@ Recording transcript: {t}"""
                                 temperature=0.2, max_tokens=2048,
                             )
                             clinical_text = strip_emdashes(resp.choices[0].message.content.strip())
-                            st.session_state["transcript"] = clinical_text
+                            n = len(st.session_state["recording_segments"]) + 1
+                            _append_segment(clinical_text, f"File {n}: {af.name} (clinical)")
                             st.session_state["transcript_mode"] = "clinical"
                             st.success("Done. Review below.")
                         except Exception as e:
@@ -1037,8 +1175,29 @@ Recording transcript: {t}"""
         pasted = st.text_area("Paste transcript", value=st.session_state.get("transcript",""), height=150, key="bg_paste")
         if pasted: st.session_state["transcript"] = pasted
 
+    # ── Show accumulated segments ──────────────────────────────────────
+    segs = st.session_state.get("recording_segments", [])
+    if segs:
+        st.caption(f"**{len(segs)} clip(s) recorded** — combined transcript below. Delete any clip to remove it.")
+        for i, seg in enumerate(segs):
+            sc1, sc2 = st.columns([5, 1])
+            with sc1:
+                st.text_area(f"🎙 {seg['label']}", value=seg["text"], height=80,
+                             key=f"seg_view_{i}", disabled=True)
+            with sc2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🗑 Delete", key=f"seg_del_{i}"):
+                    st.session_state["recording_segments"].pop(i)
+                    _rebuild_combined()
+                    st.rerun()
+        if st.button("🗑 Clear All Clips", key="seg_clear_all"):
+            st.session_state["recording_segments"] = []
+            st.session_state["transcript"] = ""
+            st.rerun()
+        st.divider()
+
     if st.session_state.get("transcript"):
-        mode_label = "✅ Clinical Language" if st.session_state.get("transcript_mode") == "clinical" else "📄 Transcript"
+        mode_label = "✅ Clinical Language" if st.session_state.get("transcript_mode") == "clinical" else "📄 Combined Transcript"
         st.text_area(f"{mode_label}", value=st.session_state["transcript"], height=180, key="bg_transcript_view")
         if st.button("Extract Background Fields from Transcript", type="primary", key="bg_extract_btn"):
             with st.spinner("Extracting fields..."):
@@ -1189,105 +1348,243 @@ with obs_type:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
+# BULK UPLOAD — drop all score sheets at once, auto-extract
+# ══════════════════════════════════════════════════════════════════════
+def _detect_file_type_bulk(fname):
+    n = fname.lower()
+    if n.endswith(".docx"):
+        if any(x in n for x in ["basc","behavior"]): return "basc_docx"
+        if any(x in n for x in ["vineland","adaptive"]): return "vineland_docx"
+        return "unknown_docx"
+    if any(x in n for x in ["basc","behavior"]):     return "basc_image"
+    if any(x in n for x in ["vineland","adaptive"]): return "vineland_image"
+    if any(x in n for x in ["ados","autism"]):       return "ados_image"
+    return "cog_image"   # default — cognitive score sheet
+
+_BULK_BASC_KEY_MAP = {
+    "Externalizing Problems T":"ext_t","Externalizing Problems CI lo":"ext_ci_lo",
+    "Externalizing Problems CI hi":"ext_ci_hi","Externalizing Problems pct":"ext_pct",
+    "Internalizing Problems T":"int_t","Internalizing Problems CI lo":"int_ci_lo",
+    "Internalizing Problems CI hi":"int_ci_hi","Internalizing Problems pct":"int_pct",
+    "Behavioral Symptoms Index T":"bsi_t","Behavioral Symptoms Index CI lo":"bsi_ci_lo",
+    "Behavioral Symptoms Index CI hi":"bsi_ci_hi","Behavioral Symptoms Index pct":"bsi_pct",
+    "Adaptive Skills T":"adp_t","Adaptive Skills CI lo":"adp_ci_lo",
+    "Adaptive Skills CI hi":"adp_ci_hi","Adaptive Skills pct":"adp_pct",
+    "Hyperactivity T":"hyperactivity_t","Hyperactivity pct":"hyperactivity_pct",
+    "Aggression T":"aggression_t","Aggression pct":"aggression_pct",
+    "Conduct Problems T":"conduct_problems_t","Conduct Problems pct":"conduct_problems_pct",
+    "Anxiety T":"anxiety_t","Anxiety pct":"anxiety_pct",
+    "Depression T":"depression_t","Depression pct":"depression_pct",
+    "Somatization T":"somatization_t","Somatization pct":"somatization_pct",
+    "Atypicality T":"atypicality_t","Atypicality pct":"atypicality_pct",
+    "Withdrawal T":"withdrawal_t","Withdrawal pct":"withdrawal_pct",
+    "Attention Problems T":"attention_problems_t","Attention Problems pct":"attention_problems_pct",
+    "Adaptability T":"adaptability_t","Adaptability pct":"adaptability_pct",
+    "Social Skills T":"social_skills_t","Social Skills pct":"social_skills_pct",
+    "Leadership T":"leadership_t","Leadership pct":"leadership_pct",
+    "Activities of Daily Living T":"activities_of_daily_living_t",
+    "Activities of Daily Living pct":"activities_of_daily_living_pct",
+    "Functional Communication T":"functional_communication_t",
+    "Functional Communication pct":"functional_communication_pct",
+}
+_BULK_VIN_KEY_MAP = {
+    "ABC":"vin_abc","Communication":"vin_comm",
+    "Daily Living Skills":"vin_daily","Socialization":"vin_social",
+}
+_BULK_ADOS_KEY_MAP = {"SA":"ados_sa","RRB":"ados_rrb","Comparison Score":"ados_comparison"}
+
+st.subheader("Upload Score Sheets")
+st.caption("Drop all files at once — Q-Global DOCX for BASC-3/Vineland-3, image/PDF for all others. Scores auto-populate in the sections below.")
+
+if "bulk_extracted" not in st.session_state:
+    st.session_state["bulk_extracted"] = {}
+
+_bulk_cog_label = "WPPSI-IV" if (use_wppsi if 'use_wppsi' in dir() else False) else \
+                  ("WISC-V"  if (use_wisc  if 'use_wisc'  in dir() else False) else \
+                  ("WAIS-V"  if (use_wais  if 'use_wais'  in dir() else False) else "WPPSI-IV"))
+
+bulk_files = st.file_uploader(
+    "Upload all score sheets",
+    type=["jpg","jpeg","png","webp","pdf","docx"],
+    accept_multiple_files=True,
+    key="bulk_score_upload",
+    label_visibility="collapsed",
+)
+
+if bulk_files:
+    new_files = []
+    for f in bulk_files:
+        raw = f.read()
+        fhash = hashlib.md5(raw).hexdigest()
+        if fhash not in st.session_state["bulk_extracted"]:
+            new_files.append((fhash, f.name, raw))
+
+    if new_files:
+        prog = st.progress(0, text="Extracting scores from uploaded files...")
+        for step, (fhash, fname, raw) in enumerate(new_files):
+            prog.progress(step / len(new_files), text=f"Reading {fname}...")
+            ftype = _detect_file_type_bulk(fname)
+            fn = fname.lower()
+            try:
+                if ftype == "basc_docx":
+                    scores = parse_basc_docx(raw)
+                    st.session_state["bulk_extracted"][fhash] = {"type": ftype, "scores": scores, "fname": fname}
+                    st.session_state["extracted_basc_scores"] = scores
+                    st.session_state["_pending_use_basc"] = True
+                    for ek, wk in _BULK_BASC_KEY_MAP.items():
+                        v = scores.get(ek)
+                        if v is not None: st.session_state[wk] = int(v)
+                elif ftype == "vineland_docx":
+                    scores = parse_vineland_docx(raw)
+                    st.session_state["bulk_extracted"][fhash] = {"type": ftype, "scores": scores, "fname": fname}
+                    st.session_state["extracted_vin_scores"] = scores
+                    st.session_state["_pending_use_vineland"] = True
+                    for ek, wk in _BULK_VIN_KEY_MAP.items():
+                        v = scores.get(ek)
+                        if v is not None: st.session_state[wk] = int(v)
+                else:
+                    img = pdf_to_image_bytes(raw) if fn.endswith(".pdf") else raw
+                    if ftype == "ados_image":
+                        context = "ADOS-2 Autism Diagnostic Observation Schedule"
+                    elif "wppsi" in fn: context = "WPPSI-IV"
+                    elif "wisc"  in fn: context = "WISC-V"
+                    elif "wais"  in fn: context = "WAIS-V"
+                    elif "ctoni" in fn or "c-toni" in fn: context = "C-TONI-2"
+                    elif "ptoni" in fn or "p-toni" in fn: context = "P-TONI"
+                    else: context = _bulk_cog_label
+                    r = extract_scores_from_image(img, context)
+                    scores = {k: v for k, v in (r.get("scores") or {}).items() if v is not None}
+                    st.session_state["bulk_extracted"][fhash] = {"type": ftype, "scores": scores, "fname": fname, "context": context}
+                    if ftype == "ados_image":
+                        st.session_state["extracted_ados_scores"] = scores
+                        st.session_state["_pending_use_ados"] = True
+                        for ek, wk in _BULK_ADOS_KEY_MAP.items():
+                            v = scores.get(ek)
+                            if v is not None: st.session_state[wk] = int(v)
+                    else:
+                        # Map short keys (VCI, FRI, etc.) to full label keys the cog fields expect
+                        _cog_key_remap = {
+                            "VCI": "Verbal Comprehension Index (VCI)",
+                            "VSI": "Visual Spatial Index (VSI)",
+                            "FRI": "Fluid Reasoning Index (FRI)",
+                            "WMI": "Working Memory Index (WMI)",
+                            "PSI": "Processing Speed Index (PSI)",
+                            "FSIQ": "Full Scale IQ (FSIQ)",
+                        }
+                        remapped = {}
+                        for k, v in scores.items():
+                            remapped[_cog_key_remap.get(k, k)] = v
+                        st.session_state["extracted_cog_scores"] = remapped
+                        # Auto-check the right cognitive battery via pending flags
+                        for _b, _ctx in [("wppsi","WPPSI-IV"),("wisc","WISC-V"),("wais","WAIS-V"),("ctoni","C-TONI-2"),("ptoni","P-TONI")]:
+                            if context == _ctx:
+                                st.session_state[f"_pending_use_{_b}"] = True
+            except Exception as e:
+                st.session_state["bulk_extracted"][fhash] = {"type": ftype, "scores": {}, "fname": fname, "error": str(e)}
+        prog.progress(1.0, text="Done!")
+        import time; time.sleep(0.3)
+        st.rerun()
+
+# Summary chips — show what was extracted
+_bulk_cache = st.session_state.get("bulk_extracted", {})
+if _bulk_cache:
+    for entry in _bulk_cache.values():
+        if entry.get("error"):
+            st.warning(f"**{entry['fname']}** — could not extract: {entry['error']}", icon="⚠️")
+        else:
+            n = len([v for v in entry.get("scores", {}).values() if v is not None])
+            st.success(f"**{entry['fname']}** — {n} scores loaded", icon="✅")
+    if st.button("Clear uploads and start fresh", key="bulk_clear"):
+        st.session_state["bulk_extracted"] = {}
+        for k in ["extracted_cog_scores","extracted_basc_scores","extracted_vin_scores","extracted_ados_scores"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+
+st.divider()
+
 # BLOCK 6a - WPPSI-IV / WISC-V
 # ══════════════════════════════════════════════════════════════════════
 cog_scores = {}
-if use_wppsi or use_wisc:
-    cog_label = "WPPSI-IV" if use_wppsi else "WISC-V"
+use_wais = use_wais if 'use_wais' in dir() else False  # guard for rerun order
+if use_wppsi or use_wisc or use_wais:
+    cog_label = "WPPSI-IV" if use_wppsi else ("WISC-V" if use_wisc else "WAIS-V")
     st.subheader(f"Cognitive Assessment - {cog_label}")
 
-    cog_photo, cog_manual = st.tabs(["Upload Score Sheet", "Manual Entry"])
     _cog = st.session_state.get("extracted_cog_scores", {})
 
-    with cog_photo:
-        st.caption("Upload score sheet as JPG, PNG, or PDF.")
-        cog_img = st.file_uploader("Upload score sheet", type=["jpg","jpeg","png","webp","pdf"], key="cog_upload", label_visibility="collapsed")
-        if cog_img:
-            raw = cog_img.read()
-            img_bytes = pdf_to_image_bytes(raw) if cog_img.name.lower().endswith(".pdf") else raw
-            st.image(img_bytes, use_container_width=True)
-            if st.button(f"Extract {cog_label} Scores", type="primary"):
-                with st.spinner("Reading score sheet..."):
-                    try:
-                        r = extract_scores_from_image(img_bytes, cog_label)
-                        st.session_state["extracted_cog_scores"] = r.get("scores",{})
-                        _cog = st.session_state["extracted_cog_scores"]
-                        st.success("Scores extracted. Review in Manual Entry tab.")
-                        if r.get("notes"): st.warning(r["notes"])
-                    except Exception as e:
-                        st.error(f"Extraction failed: {e}")
+    nonverbal_mode = st.checkbox("Non-verbal / Underresponsive patient (use estimated subtest template)", value=False, key="cog_nonverbal")
+    cog_scores["nonverbal_mode"] = nonverbal_mode
 
-    with cog_manual:
-        nonverbal_mode = st.checkbox("Non-verbal / Underresponsive patient (use estimated subtest template)", value=False, key="cog_nonverbal")
-        cog_scores["nonverbal_mode"] = nonverbal_mode
-
-        obtained = st.radio("Were scores obtained?", ["Yes - full battery administered", "No - unable to obtain scores"], horizontal=True)
-        if "No" in obtained:
-            cog_not_obtained_reason = st.text_area("Reason scores not obtained",
-                placeholder="e.g. Patient was unable to sustain attention and participate during this evaluation. Patient often uttered nonsense words to herself and provided no responses to any questions.",
-                height=80)
-            cog_scores["obtained"] = False
-            cog_scores["reason"]   = cog_not_obtained_reason
-        else:
-            cog_scores["obtained"] = True
-            if nonverbal_mode:
-                st.caption("Non-verbal mode: subtest-level scaled scores (1-19). Composite scores defaulted to floor (<70).")
-                # --- Subtest inputs ---
-                if use_wppsi:
-                    st.markdown("**WPPSI-IV Subtests** (scaled score 1-19, default 1 for non-verbal template)")
-                    wppsi_subtests = [
-                        ("Information","IN",False),("Similarities","SI",False),("Vocabulary","VC",False),
-                        ("Comprehension","CO",True),("Block Design","BD",False),("Object Assembly","OA",True),
-                        ("Matrix Reasoning","MR",False),("Picture Concepts","PC",False),("Picture Memory","PM",False),
-                        ("Zoo Locations","ZL",False),("Bug Search","BS",True),("Cancellation","CA",False),
-                        ("Animal Coding","AC",False),
-                    ]
-                    subtest_col1, subtest_col2 = st.columns(2)
-                    subtest_scores = {}
-                    for idx, (name, abbrev, optional) in enumerate(wppsi_subtests):
-                        col_target = subtest_col1 if idx % 2 == 0 else subtest_col2
-                        with col_target:
-                            help_txt = "Optional/supplemental" if optional else None
-                            val = st.number_input(f"{name} ({abbrev})", 1, 19, 1, key=f"wppsi_sub_{abbrev}", help=help_txt)
-                            subtest_scores[name] = val
-                else:
-                    st.markdown("**WISC-V Subtests** (scaled score 1-19, default 1 for non-verbal template)")
-                    wisc_subtests = [
-                        ("Similarities","SI"),("Vocabulary","VC"),("Block Design","BD"),
-                        ("Visual Puzzles","VP"),("Matrix Reasoning","MR"),("Figure Weights","FW"),
-                        ("Picture Span","PS"),("Digit Span","DS"),("Symbol Search","SS"),("Coding","CD"),
-                    ]
-                    subtest_col1, subtest_col2 = st.columns(2)
-                    subtest_scores = {}
-                    for idx, (name, abbrev) in enumerate(wisc_subtests):
-                        col_target = subtest_col1 if idx % 2 == 0 else subtest_col2
-                        with col_target:
-                            val = st.number_input(f"{name} ({abbrev})", 1, 19, 1, key=f"wisc_sub_{abbrev}")
-                            subtest_scores[name] = val
-                cog_scores["subtests"] = subtest_scores
-
-                # --- Composite scores (estimated floor) ---
-                st.caption("Estimated composite scores (floor <70). Pre-filled with 69. Edit if higher scores obtained.")
-                col1, col2 = st.columns(2)
-                with col1:
-                    for label, default in [("Full Scale IQ (FSIQ)",69),("Verbal Comprehension Index (VCI)",69),("Visual Spatial Index (VSI)",69)]:
-                        v = st.number_input(label, 40, 160, int(_cog.get(label, default)), key=f"cog_est_{label}")
-                        cog_scores[label] = v
-                with col2:
-                    for label, default in [("Fluid Reasoning Index (FRI)",69),("Working Memory Index (WMI)",69),("Processing Speed Index (PSI)",69)]:
-                        v = st.number_input(label, 40, 160, int(_cog.get(label, default)), key=f"cog_est_{label}")
-                        cog_scores[label] = v
+    obtained = st.radio("Were scores obtained?", ["Yes - full battery administered", "No - unable to obtain scores"], horizontal=True)
+    if "No" in obtained:
+        cog_not_obtained_reason = st.text_area("Reason scores not obtained",
+            placeholder="e.g. Patient was unable to sustain attention and participate during this evaluation. Patient often uttered nonsense words to herself and provided no responses to any questions.",
+            height=80)
+        cog_scores["obtained"] = False
+        cog_scores["reason"]   = cog_not_obtained_reason
+    else:
+        cog_scores["obtained"] = True
+        if nonverbal_mode:
+            st.caption("Non-verbal mode: subtest-level scaled scores (1-19). Composite scores defaulted to floor (<70).")
+            # --- Subtest inputs ---
+            if use_wppsi:
+                st.markdown("**WPPSI-IV Subtests** (scaled score 1-19, default 1 for non-verbal template)")
+                wppsi_subtests = [
+                    ("Information","IN",False),("Similarities","SI",False),("Vocabulary","VC",False),
+                    ("Comprehension","CO",True),("Block Design","BD",False),("Object Assembly","OA",True),
+                    ("Matrix Reasoning","MR",False),("Picture Concepts","PC",False),("Picture Memory","PM",False),
+                    ("Zoo Locations","ZL",False),("Bug Search","BS",True),("Cancellation","CA",False),
+                    ("Animal Coding","AC",False),
+                ]
+                subtest_col1, subtest_col2 = st.columns(2)
+                subtest_scores = {}
+                for idx, (name, abbrev, optional) in enumerate(wppsi_subtests):
+                    col_target = subtest_col1 if idx % 2 == 0 else subtest_col2
+                    with col_target:
+                        help_txt = "Optional/supplemental" if optional else None
+                        val = st.number_input(f"{name} ({abbrev})", 1, 19, 1, key=f"wppsi_sub_{abbrev}", help=help_txt)
+                        subtest_scores[name] = val
             else:
-                st.caption("Enter index scores (Standard Score, mean=100, SD=15)")
-                col1, col2 = st.columns(2)
-                with col1:
-                    for label, default in [("Full Scale IQ (FSIQ)",85),("Verbal Comprehension Index (VCI)",82),("Visual Spatial Index (VSI)",88)]:
-                        v = st.number_input(label, 40, 160, int(_cog.get(label, default)))
-                        cog_scores[label] = v
-                with col2:
-                    for label, default in [("Fluid Reasoning Index (FRI)",84),("Working Memory Index (WMI)",80),("Processing Speed Index (PSI)",78)]:
-                        v = st.number_input(label, 40, 160, int(_cog.get(label, default)))
-                        cog_scores[label] = v
+                battery_label = "WISC-V" if use_wisc else "WAIS-V"
+                key_prefix    = "wisc" if use_wisc else "wais"
+                st.markdown(f"**{battery_label} Subtests** (scaled score 1-19, default 1 for non-verbal template)")
+                wisc_wais_subtests = [
+                    ("Similarities","SI"),("Vocabulary","VC"),("Block Design","BD"),
+                    ("Visual Puzzles","VP"),("Matrix Reasoning","MR"),("Figure Weights","FW"),
+                    ("Picture Span","PS"),("Digit Span","DS"),("Symbol Search","SS"),("Coding","CD"),
+                ]
+                subtest_col1, subtest_col2 = st.columns(2)
+                subtest_scores = {}
+                for idx, (name, abbrev) in enumerate(wisc_wais_subtests):
+                    col_target = subtest_col1 if idx % 2 == 0 else subtest_col2
+                    with col_target:
+                        val = st.number_input(f"{name} ({abbrev})", 1, 19, 1, key=f"{key_prefix}_sub_{abbrev}")
+                        subtest_scores[name] = val
+            cog_scores["subtests"] = subtest_scores
+
+            # --- Composite scores (estimated floor) ---
+            st.caption("Estimated composite scores (floor <70). Pre-filled with 69. Edit if higher scores obtained.")
+            col1, col2 = st.columns(2)
+            with col1:
+                for label, default in [("Full Scale IQ (FSIQ)",69),("Verbal Comprehension Index (VCI)",69),("Visual Spatial Index (VSI)",69)]:
+                    v = st.number_input(label, 40, 160, int(_cog.get(label, default)), key=f"cog_est_{label}")
+                    cog_scores[label] = v
+            with col2:
+                for label, default in [("Fluid Reasoning Index (FRI)",69),("Working Memory Index (WMI)",69),("Processing Speed Index (PSI)",69)]:
+                    v = st.number_input(label, 40, 160, int(_cog.get(label, default)), key=f"cog_est_{label}")
+                    cog_scores[label] = v
+        else:
+            st.caption("Enter index scores (Standard Score, mean=100, SD=15)")
+            col1, col2 = st.columns(2)
+            with col1:
+                for label, default in [("Full Scale IQ (FSIQ)",85),("Verbal Comprehension Index (VCI)",82),("Visual Spatial Index (VSI)",88)]:
+                    v = st.number_input(label, 40, 160, int(_cog.get(label, default)))
+                    cog_scores[label] = v
+            with col2:
+                for label, default in [("Fluid Reasoning Index (FRI)",84),("Working Memory Index (WMI)",80),("Processing Speed Index (PSI)",78)]:
+                    v = st.number_input(label, 40, 160, int(_cog.get(label, default)))
+                    cog_scores[label] = v
 
     st.divider()
 
@@ -1298,195 +1595,74 @@ basc_data = {}
 if use_basc:
     st.subheader("BASC-3 - Behavior Assessment System for Children (Parent Rating Scales)")
 
-    basc_photo, basc_manual = st.tabs(["📷  Upload Score Sheet Photo", "✏️  Manual Entry"])
     _basc = st.session_state.get("extracted_basc_scores", {})
 
-    with basc_photo:
-        st.caption("Upload the Q-Global DOCX export (recommended — 100% accurate) or a photo/PDF of the score sheet.")
-        basc_img = st.file_uploader("BASC-3 PRS score sheet", type=["docx","jpg","jpeg","png","webp","pdf"], key="basc_upload")
+    b_respondent = st.text_input("Respondent name (parent/caregiver)", placeholder="e.g. Thangiere P. Burns")
+    b_form = st.selectbox("Form version", ["Preschool (ages 2-5)","Child (ages 6-11)","Adolescent (ages 12-21)"])
 
-        _BASC_KEY_MAP = {
-            "Externalizing Problems T":       "ext_t",
-            "Externalizing Problems CI lo":   "ext_ci_lo",
-            "Externalizing Problems CI hi":   "ext_ci_hi",
-            "Externalizing Problems pct":     "ext_pct",
-            "Internalizing Problems T":       "int_t",
-            "Internalizing Problems CI lo":   "int_ci_lo",
-            "Internalizing Problems CI hi":   "int_ci_hi",
-            "Internalizing Problems pct":     "int_pct",
-            "Behavioral Symptoms Index T":    "bsi_t",
-            "Behavioral Symptoms Index CI lo":"bsi_ci_lo",
-            "Behavioral Symptoms Index CI hi":"bsi_ci_hi",
-            "Behavioral Symptoms Index pct":  "bsi_pct",
-            "Adaptive Skills T":              "adp_t",
-            "Adaptive Skills CI lo":          "adp_ci_lo",
-            "Adaptive Skills CI hi":          "adp_ci_hi",
-            "Adaptive Skills pct":            "adp_pct",
-            "Hyperactivity T":                "hyperactivity_t",
-            "Hyperactivity pct":              "hyperactivity_pct",
-            "Aggression T":                   "aggression_t",
-            "Aggression pct":                 "aggression_pct",
-            "Conduct Problems T":             "conduct_problems_t",
-            "Conduct Problems pct":           "conduct_problems_pct",
-            "Anxiety T":                      "anxiety_t",
-            "Anxiety pct":                    "anxiety_pct",
-            "Depression T":                   "depression_t",
-            "Depression pct":                 "depression_pct",
-            "Somatization T":                 "somatization_t",
-            "Somatization pct":               "somatization_pct",
-            "Atypicality T":                  "atypicality_t",
-            "Atypicality pct":                "atypicality_pct",
-            "Withdrawal T":                   "withdrawal_t",
-            "Withdrawal pct":                 "withdrawal_pct",
-            "Attention Problems T":           "attention_problems_t",
-            "Attention Problems pct":         "attention_problems_pct",
-            "Adaptability T":                 "adaptability_t",
-            "Adaptability pct":               "adaptability_pct",
-            "Social Skills T":                "social_skills_t",
-            "Social Skills pct":              "social_skills_pct",
-            "Leadership T":                   "leadership_t",
-            "Leadership pct":                 "leadership_pct",
-            "Activities of Daily Living T":   "activities_of_daily_living_t",
-            "Activities of Daily Living pct": "activities_of_daily_living_pct",
-            "Functional Communication T":     "functional_communication_t",
-            "Functional Communication pct":   "functional_communication_pct",
-        }
+    st.markdown("#### Composite Scores  *(T-score + 90% CI + Percentile)*")
+    st.caption("Get these from Q-Global printout or score report.")
 
-        if basc_img:
-            raw_basc = basc_img.read()
-            fname_lower = basc_img.name.lower()
+    def composite_inputs(label, key_prefix, default_t=55, default_pct=50):
+        # Pull from extracted scores if available, fall back to defaults
+        extracted_t    = _basc.get(f"{label} T")
+        extracted_ci_lo= _basc.get(f"{label} CI lo")
+        extracted_ci_hi= _basc.get(f"{label} CI hi")
+        extracted_pct  = _basc.get(f"{label} pct")
+        use_t    = int(extracted_t)    if extracted_t    not in (None, 0) else default_t
+        use_pct  = int(extracted_pct)  if extracted_pct  is not None     else default_pct
+        use_ci_lo= int(extracted_ci_lo)if extracted_ci_lo not in (None, 0) else max(20, use_t - 4)
+        use_ci_hi= int(extracted_ci_hi)if extracted_ci_hi not in (None, 0) else min(100, use_t + 4)
+        c1,c2,c3,c4 = st.columns([2,1,1,1])
+        c1.markdown(f"**{label}**")
+        t    = c2.number_input("T",      20, 100, max(20, use_t),    key=f"{key_prefix}_t")
+        ci_lo= c3.number_input("CI lo",  20, 100, max(20, use_ci_lo),key=f"{key_prefix}_ci_lo")
+        ci_hi= c4.number_input("CI hi",  20, 100, max(20, use_ci_hi),key=f"{key_prefix}_ci_hi")
+        pct  = st.number_input(f"Percentile ({label})", 0, 99, max(0, use_pct), key=f"{key_prefix}_pct")
+        return t, ci_lo, ci_hi, pct
 
-            if fname_lower.endswith(".docx"):
-                # ── Q-Global DOCX: deterministic parse, no AI needed ──
-                st.info("Q-Global DOCX detected — extracting scores directly (no AI).")
-                if st.button("Extract BASC-3 Scores", type="primary", key="basc_extract_btn"):
-                    with st.spinner("Parsing BASC-3 DOCX..."):
-                        try:
-                            scores = parse_basc_docx(raw_basc)
-                            st.session_state["extracted_basc_scores"] = scores
-                            for extracted_key, widget_key in _BASC_KEY_MAP.items():
-                                val = scores.get(extracted_key)
-                                if val is not None:
-                                    st.session_state[widget_key] = int(val)
-                            populated = {k: v for k, v in scores.items() if v is not None}
-                            st.success(f"Parsed {len(populated)} scores from Q-Global export.")
-                            with st.expander("Extracted values"):
-                                st.json(scores)
-                            _drive_url = upload_to_drive(raw_basc, f"BASC3_{patient_name}_{eval_date}.docx",
-                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                            if _drive_url:
-                                st.success(f"Saved to Google Drive: [view file]({_drive_url})")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Parse failed: {e}")
-                            import traceback; st.code(traceback.format_exc())
+    def subscale_inputs(scales, adaptive=False):
+        data = {}
+        for s in scales:
+            key = s.lower().replace(" ", "_")
+            default_t = 45 if adaptive else 55
+            c1,c2,c3 = st.columns([3,1,1])
+            c1.write(s)
+            t   = c2.number_input("T", 20, 100, int(_basc.get(f"{s} T") or default_t), key=f"{key}_t")
+            pct = c3.number_input("%ile", 0, 99, int(_basc.get(f"{s} pct") or 50),    key=f"{key}_pct")
+            data[f"{key}_t"]   = t
+            data[f"{key}_pct"] = pct
+            color = t_flag(t, adaptive)
+            cls   = t_classification(t, adaptive)
+            if color == "red":    st.error(f"  → {cls}", icon=None)
+            elif color == "orange": st.warning(f"  → {cls}", icon=None)
+        return data
 
-            else:
-                # ── Image / PDF: vision model fallback ──
-                if fname_lower.endswith(".pdf"):
-                    _basc_pages_all = pdf_to_images_list(raw_basc)
-                    st.image(_basc_pages_all[0], caption=f"Page 1 of {len(_basc_pages_all)}", use_container_width=True)
-                    basc_img_list = _basc_pages_all
-                else:
-                    st.image(raw_basc, use_container_width=True)
-                    basc_img_list = [raw_basc]
+    ext_t,ext_ci_lo,ext_ci_hi,ext_pct = composite_inputs("Externalizing Problems", "ext", 50, 50)
+    basc_data.update({"ext_t":ext_t,"ext_ci_lo":ext_ci_lo,"ext_ci_hi":ext_ci_hi,"ext_pct":ext_pct})
+    st.markdown("*Externalizing subscales:*")
+    basc_data.update(subscale_inputs(["Hyperactivity","Aggression","Conduct Problems"]))
 
-                _drive_url = upload_to_drive(raw_basc, f"BASC3_{patient_name}_{eval_date}{'.pdf' if fname_lower.endswith('.pdf') else '.jpg'}",
-                    "application/pdf" if fname_lower.endswith(".pdf") else "image/jpeg")
-                if _drive_url:
-                    st.success(f"Saved to Google Drive: [view file]({_drive_url})")
+    st.markdown("---")
+    int_t,int_ci_lo,int_ci_hi,int_pct = composite_inputs("Internalizing Problems", "int", 50, 50)
+    basc_data.update({"int_t":int_t,"int_ci_lo":int_ci_lo,"int_ci_hi":int_ci_hi,"int_pct":int_pct})
+    st.markdown("*Internalizing subscales:*")
+    basc_data.update(subscale_inputs(["Anxiety","Depression","Somatization"]))
 
-                if st.button("Extract BASC-3 Scores", type="primary", key="basc_extract_btn"):
-                    with st.spinner("Reading BASC-3 scores via AI..."):
-                        try:
-                            r = extract_scores_from_image(basc_img_list, "BASC-3 Parent Rating Scales")
-                            scores = r.get("scores", {})
-                            st.session_state["extracted_basc_scores"] = scores
-                            for extracted_key, widget_key in _BASC_KEY_MAP.items():
-                                val = scores.get(extracted_key)
-                                if val is not None:
-                                    st.session_state[widget_key] = int(val)
-                            populated = {k: v for k, v in scores.items() if v is not None}
-                            st.success(f"Extracted {len(populated)} scores. Switch to Manual Entry tab to review.")
-                            with st.expander("Raw extracted values (for verification)"):
-                                st.json(scores)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed: {e}")
-                            import traceback; st.code(traceback.format_exc())
+    st.markdown("---")
+    bsi_t,bsi_ci_lo,bsi_ci_hi,bsi_pct = composite_inputs("Behavioral Symptoms Index (BSI)", "bsi", 50, 50)
+    basc_data.update({"bsi_t":bsi_t,"bsi_ci_lo":bsi_ci_lo,"bsi_ci_hi":bsi_ci_hi,"bsi_pct":bsi_pct})
+    st.markdown("*Additional BSI subscales (Atypicality, Withdrawal, Attention Problems):*")
+    basc_data.update(subscale_inputs(["Atypicality","Withdrawal","Attention Problems"]))
 
-        # Always show last extracted values if available
-        if st.session_state.get("extracted_basc_scores"):
-            with st.expander("Last extracted scores"):
-                st.json(st.session_state["extracted_basc_scores"])
-
-    with basc_manual:
-        b_respondent = st.text_input("Respondent name (parent/caregiver)", placeholder="e.g. Thangiere P. Burns")
-        b_form = st.selectbox("Form version", ["Preschool (ages 2-5)","Child (ages 6-11)","Adolescent (ages 12-21)"])
-
-        st.markdown("#### Composite Scores  *(T-score + 90% CI + Percentile)*")
-        st.caption("Get these from Q-Global printout or score report.")
-
-        def composite_inputs(label, key_prefix, default_t=55, default_pct=50):
-            # Pull from extracted scores if available, fall back to defaults
-            extracted_t    = _basc.get(f"{label} T")
-            extracted_ci_lo= _basc.get(f"{label} CI lo")
-            extracted_ci_hi= _basc.get(f"{label} CI hi")
-            extracted_pct  = _basc.get(f"{label} pct")
-            use_t    = int(extracted_t)    if extracted_t    not in (None, 0) else default_t
-            use_pct  = int(extracted_pct)  if extracted_pct  is not None     else default_pct
-            use_ci_lo= int(extracted_ci_lo)if extracted_ci_lo not in (None, 0) else max(20, use_t - 4)
-            use_ci_hi= int(extracted_ci_hi)if extracted_ci_hi not in (None, 0) else min(100, use_t + 4)
-            c1,c2,c3,c4 = st.columns([2,1,1,1])
-            c1.markdown(f"**{label}**")
-            t    = c2.number_input("T",      20, 100, max(20, use_t),    key=f"{key_prefix}_t")
-            ci_lo= c3.number_input("CI lo",  20, 100, max(20, use_ci_lo),key=f"{key_prefix}_ci_lo")
-            ci_hi= c4.number_input("CI hi",  20, 100, max(20, use_ci_hi),key=f"{key_prefix}_ci_hi")
-            pct  = st.number_input(f"Percentile ({label})", 0, 99, max(0, use_pct), key=f"{key_prefix}_pct")
-            return t, ci_lo, ci_hi, pct
-
-        def subscale_inputs(scales, adaptive=False):
-            data = {}
-            for s in scales:
-                key = s.lower().replace(" ", "_")
-                default_t = 45 if adaptive else 55
-                c1,c2,c3 = st.columns([3,1,1])
-                c1.write(s)
-                t   = c2.number_input("T", 20, 100, int(_basc.get(f"{s} T") or default_t), key=f"{key}_t")
-                pct = c3.number_input("%ile", 0, 99, int(_basc.get(f"{s} pct") or 50),    key=f"{key}_pct")
-                data[f"{key}_t"]   = t
-                data[f"{key}_pct"] = pct
-                color = t_flag(t, adaptive)
-                cls   = t_classification(t, adaptive)
-                if color == "red":    st.error(f"  → {cls}", icon=None)
-                elif color == "orange": st.warning(f"  → {cls}", icon=None)
-            return data
-
-        ext_t,ext_ci_lo,ext_ci_hi,ext_pct = composite_inputs("Externalizing Problems", "ext", 50, 50)
-        basc_data.update({"ext_t":ext_t,"ext_ci_lo":ext_ci_lo,"ext_ci_hi":ext_ci_hi,"ext_pct":ext_pct})
-        st.markdown("*Externalizing subscales:*")
-        basc_data.update(subscale_inputs(["Hyperactivity","Aggression","Conduct Problems"]))
-
-        st.markdown("---")
-        int_t,int_ci_lo,int_ci_hi,int_pct = composite_inputs("Internalizing Problems", "int", 50, 50)
-        basc_data.update({"int_t":int_t,"int_ci_lo":int_ci_lo,"int_ci_hi":int_ci_hi,"int_pct":int_pct})
-        st.markdown("*Internalizing subscales:*")
-        basc_data.update(subscale_inputs(["Anxiety","Depression","Somatization"]))
-
-        st.markdown("---")
-        bsi_t,bsi_ci_lo,bsi_ci_hi,bsi_pct = composite_inputs("Behavioral Symptoms Index (BSI)", "bsi", 50, 50)
-        basc_data.update({"bsi_t":bsi_t,"bsi_ci_lo":bsi_ci_lo,"bsi_ci_hi":bsi_ci_hi,"bsi_pct":bsi_pct})
-        st.markdown("*Additional BSI subscales (Atypicality, Withdrawal, Attention Problems):*")
-        basc_data.update(subscale_inputs(["Atypicality","Withdrawal","Attention Problems"]))
-
-        st.markdown("---")
-        adp_t,adp_ci_lo,adp_ci_hi,adp_pct = composite_inputs("Adaptive Skills", "adp", 50, 50)
-        basc_data.update({"adp_t":adp_t,"adp_ci_lo":adp_ci_lo,"adp_ci_hi":adp_ci_hi,"adp_pct":adp_pct})
-        st.markdown("*Adaptive subscales (low T = problem):*")
-        basc_data.update(subscale_inputs(["Adaptability","Social Skills","Leadership",
-                                          "Activities of Daily Living","Functional Communication"], adaptive=True))
-        basc_data["respondent"] = b_respondent
-        basc_data["form"]       = b_form
+    st.markdown("---")
+    adp_t,adp_ci_lo,adp_ci_hi,adp_pct = composite_inputs("Adaptive Skills", "adp", 50, 50)
+    basc_data.update({"adp_t":adp_t,"adp_ci_lo":adp_ci_lo,"adp_ci_hi":adp_ci_hi,"adp_pct":adp_pct})
+    st.markdown("*Adaptive subscales (low T = problem):*")
+    basc_data.update(subscale_inputs(["Adaptability","Social Skills","Leadership",
+                                      "Activities of Daily Living","Functional Communication"], adaptive=True))
+    basc_data["respondent"] = b_respondent
+    basc_data["form"]       = b_form
 
     st.divider()
 
@@ -1497,102 +1673,42 @@ vineland_data = {}
 if use_vineland:
     st.subheader("Vineland-3 - Adaptive Behavior Scales")
 
-    vin_photo, vin_manual = st.tabs(["📷  Upload Score Sheet Photo", "✏️  Manual Entry"])
     _vin = st.session_state.get("extracted_vin_scores", {})
 
-    _VIN_KEY_MAP = {
-        "ABC":                "vin_abc",
-        "Communication":      "vin_comm",
-        "Daily Living Skills":"vin_daily",
-        "Socialization":      "vin_social",
+    col1, col2 = st.columns(2)
+    with col1:
+        vin_respondent    = st.text_input("Respondent name + relationship", placeholder="e.g. Thangiere P. Burns, mother")
+        vin_date_completed= st.text_input("Date form completed", value=eval_date.strftime("%m/%d/%Y"))
+    with col2:
+        st.caption("Standard Scores (mean=100, SD=15)")
+
+    c1,c2,c3,c4 = st.columns(4)
+    vin_abc   = c1.number_input("ABC",          20,160, int(_vin.get("ABC",44)),          key="vin_abc")
+    vin_comm  = c2.number_input("Communication",20,160, int(_vin.get("Communication",30)), key="vin_comm")
+    vin_daily = c3.number_input("Daily Living",  20,160, int(_vin.get("Daily Living Skills",45)), key="vin_daily")
+    vin_social= c4.number_input("Socialization", 20,160, int(_vin.get("Socialization",42)), key="vin_social")
+
+    # Auto percentiles
+    ap = ss_to_pct(vin_abc); cp = ss_to_pct(vin_comm); dp = ss_to_pct(vin_daily); sp = ss_to_pct(vin_social)
+    c1.caption(f"{'<1' if ap==0 else ap}th %ile · {ss_adaptive_level(vin_abc)}")
+    c2.caption(f"{'<1' if cp==0 else cp}th %ile · {ss_adaptive_level(vin_comm)}")
+    c3.caption(f"{'<1' if dp==0 else dp}th %ile · {ss_adaptive_level(vin_daily)}")
+    c4.caption(f"{'<1' if sp==0 else sp}th %ile · {ss_adaptive_level(vin_social)}")
+
+    vineland_data = {
+        "abc": vin_abc, "comm": vin_comm, "daily": vin_daily, "social": vin_social,
+        "comm_pct": cp, "daily_pct": dp, "social_pct": sp,
+        "respondent": vin_respondent, "date_completed": vin_date_completed
     }
 
-    with vin_photo:
-        st.caption("Upload the Q-Global DOCX export (recommended — 100% accurate) or a photo/PDF of the score sheet.")
-        vin_img = st.file_uploader("Vineland-3 score sheet", type=["docx","jpg","jpeg","png","webp","pdf"], key="vin_upload")
-        if vin_img:
-            raw_vin = vin_img.read()
-            fname_lower_vin = vin_img.name.lower()
-
-            if fname_lower_vin.endswith(".docx"):
-                st.info("Q-Global DOCX detected — extracting scores directly (no AI).")
-                if st.button("Extract Vineland-3 Scores", type="primary", key="vin_extract_btn"):
-                    with st.spinner("Parsing Vineland-3 DOCX..."):
-                        try:
-                            scores = parse_vineland_docx(raw_vin)
-                            st.session_state["extracted_vin_scores"] = scores
-                            for extracted_key, widget_key in _VIN_KEY_MAP.items():
-                                val = scores.get(extracted_key)
-                                if val is not None:
-                                    st.session_state[widget_key] = int(val)
-                            populated = {k: v for k, v in scores.items() if v is not None}
-                            st.success(f"Parsed {len(populated)} scores from Q-Global export.")
-                            with st.expander("Extracted values"):
-                                st.json(scores)
-                            _vin_drive = upload_to_drive(raw_vin, f"Vineland3_{patient_name}_{eval_date}.docx",
-                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                            if _vin_drive:
-                                st.success(f"Saved to Google Drive: [view file]({_vin_drive})")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Parse failed: {e}")
-                            import traceback; st.code(traceback.format_exc())
-            else:
-                vin_img_bytes = pdf_to_image_bytes(raw_vin) if fname_lower_vin.endswith(".pdf") else raw_vin
-                st.image(vin_img_bytes, use_container_width=True)
-                _vin_drive = upload_to_drive(raw_vin, f"Vineland3_{patient_name}_{eval_date}{'.pdf' if fname_lower_vin.endswith('.pdf') else '.jpg'}",
-                    "application/pdf" if fname_lower_vin.endswith(".pdf") else "image/jpeg")
-                if _vin_drive:
-                    st.success(f"Saved to Google Drive: [view file]({_vin_drive})")
-                if st.button("Extract Vineland-3 Scores", type="primary", key="vin_extract_btn"):
-                    with st.spinner("Reading Vineland scores via AI..."):
-                        try:
-                            r = extract_scores_from_image(vin_img_bytes, "Vineland-3 Adaptive Behavior Scales")
-                            scores = r.get("scores", {})
-                            st.session_state["extracted_vin_scores"] = scores
-                            for extracted_key, widget_key in _VIN_KEY_MAP.items():
-                                val = scores.get(extracted_key)
-                                if val is not None:
-                                    st.session_state[widget_key] = int(val)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed: {e}")
-
-    with vin_manual:
-        col1, col2 = st.columns(2)
-        with col1:
-            vin_respondent    = st.text_input("Respondent name + relationship", placeholder="e.g. Thangiere P. Burns, mother")
-            vin_date_completed= st.text_input("Date form completed", value=eval_date.strftime("%m/%d/%Y"))
-        with col2:
-            st.caption("Standard Scores (mean=100, SD=15)")
-
-        c1,c2,c3,c4 = st.columns(4)
-        vin_abc   = c1.number_input("ABC",          20,160, int(_vin.get("ABC",44)),          key="vin_abc")
-        vin_comm  = c2.number_input("Communication",20,160, int(_vin.get("Communication",30)), key="vin_comm")
-        vin_daily = c3.number_input("Daily Living",  20,160, int(_vin.get("Daily Living Skills",45)), key="vin_daily")
-        vin_social= c4.number_input("Socialization", 20,160, int(_vin.get("Socialization",42)), key="vin_social")
-
-        # Auto percentiles
-        ap = ss_to_pct(vin_abc); cp = ss_to_pct(vin_comm); dp = ss_to_pct(vin_daily); sp = ss_to_pct(vin_social)
-        c1.caption(f"{'<1' if ap==0 else ap}th %ile · {ss_adaptive_level(vin_abc)}")
-        c2.caption(f"{'<1' if cp==0 else cp}th %ile · {ss_adaptive_level(vin_comm)}")
-        c3.caption(f"{'<1' if dp==0 else dp}th %ile · {ss_adaptive_level(vin_daily)}")
-        c4.caption(f"{'<1' if sp==0 else sp}th %ile · {ss_adaptive_level(vin_social)}")
-
-        vineland_data = {
-            "abc": vin_abc, "comm": vin_comm, "daily": vin_daily, "social": vin_social,
-            "comm_pct": cp, "daily_pct": dp, "social_pct": sp,
-            "respondent": vin_respondent, "date_completed": vin_date_completed
-        }
-
-        # OPWDD eligibility check
-        if use_ados or True:
-            if vin_abc <= 70:
-                st.error(f"ABC = {vin_abc} ≤ 70 - Meets adaptive deficit criterion for OPWDD / IDD eligibility")
-            elif vin_abc <= 85:
-                st.warning(f"ABC = {vin_abc} - Moderately Low range (below average but above IDD threshold)")
-            else:
-                st.success(f"ABC = {vin_abc} - Within or above average adaptive range")
+    # OPWDD eligibility check
+    if use_ados or True:
+        if vin_abc <= 70:
+            st.error(f"ABC = {vin_abc} ≤ 70 - Meets adaptive deficit criterion for OPWDD / IDD eligibility")
+        elif vin_abc <= 85:
+            st.warning(f"ABC = {vin_abc} - Moderately Low range (below average but above IDD threshold)")
+        else:
+            st.success(f"ABC = {vin_abc} - Within or above average adaptive range")
 
     st.divider()
 
@@ -1603,115 +1719,84 @@ ados_data = {}
 if use_ados:
     st.subheader("ADOS-2 - Autism Diagnostic Observation Schedule")
 
-    ados_photo, ados_manual = st.tabs(["📷  Upload Score Sheet Photo", "✏️  Manual Entry"])
     _ados = st.session_state.get("extracted_ados_scores", {})
 
-    with ados_photo:
-        ados_img = st.file_uploader("ADOS-2 score sheet", type=["jpg","jpeg","png","webp","pdf"], key="ados_upload")
-        if ados_img:
-            raw_ados = ados_img.read()
-            ados_img_bytes = pdf_to_image_bytes(raw_ados) if ados_img.name.lower().endswith(".pdf") else raw_ados
-            st.image(ados_img_bytes, use_container_width=True)
-            _ados_drive = upload_to_drive(raw_ados, f"ADOS2_{patient_name}_{eval_date}{'.pdf' if ados_img.name.lower().endswith('.pdf') else '.jpg'}", "application/pdf" if ados_img.name.lower().endswith(".pdf") else "image/jpeg")
-            if _ados_drive:
-                st.success(f"Saved to Google Drive: [view file]({_ados_drive})")
-            if st.button("Extract ADOS-2 Scores", type="primary"):
-                with st.spinner("Reading ADOS-2 scores..."):
-                    try:
-                        r = extract_scores_from_image(ados_img_bytes, "ADOS-2 Autism Diagnostic Observation Schedule")
-                        scores = r.get("scores", {})
-                        st.session_state["extracted_ados_scores"] = scores
-                        # Write directly to widget keys so number_inputs update
-                        _ados_key_map = {
-                            "SA": "ados_sa",
-                            "RRB": "ados_rrb",
-                            "Comparison Score": "ados_comparison",
-                        }
-                        for extracted_key, widget_key in _ados_key_map.items():
-                            val = scores.get(extracted_key)
-                            if val is not None:
-                                st.session_state[widget_key] = int(val)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed: {e}")
+    col1, col2 = st.columns(2)
+    with col1:
+        ados_module = st.selectbox("Module", ["Toddler (T)","Module 1","Module 2","Module 3","Module 4"])
+        if ados_module in ("Toddler (T)", "Module 1", "Module 2"):
+            st.info("Non-verbal patient detected - consider adding C-TONI or P-TONI.")
+        ados_module_reason = st.text_input("Why this module was selected",
+            placeholder="e.g. Selected because patient demonstrates low verbal ability, stating only single words")
+        def _ados_int(key, default, lo, hi):
+            v = _ados.get(key)
+            try: v = int(v)
+            except (TypeError, ValueError): v = default
+            return max(lo, min(hi, v))
+        ados_sa  = st.number_input("Social Affect (SA) raw score", 0, 28, _ados_int("SA", 20, 0, 28), key="ados_sa")
+        ados_rrb = st.number_input("Restricted & Repetitive Behavior (RRB) raw score", 0, 10, _ados_int("RRB", 8, 0, 10), key="ados_rrb")
+        ados_combined = ados_sa + ados_rrb
+        st.metric("Algorithm Combined Total (SA + RRB)", ados_combined)
+        ados_comparison = st.number_input("Comparison Score (1-10)", 1, 10, _ados_int("Comparison Score", 10, 1, 10), key="ados_comparison")
 
-    with ados_manual:
-        col1, col2 = st.columns(2)
-        with col1:
-            ados_module = st.selectbox("Module", ["Toddler (T)","Module 1","Module 2","Module 3","Module 4"])
-            if ados_module in ("Toddler (T)", "Module 1", "Module 2"):
-                st.info("Non-verbal patient detected — consider adding C-TONI or P-TONI.")
-            ados_module_reason = st.text_input("Why this module was selected",
-                placeholder="e.g. Selected because patient demonstrates low verbal ability, stating only single words")
-            def _ados_int(key, default, lo, hi):
-                v = _ados.get(key)
-                try: v = int(v)
-                except (TypeError, ValueError): v = default
-                return max(lo, min(hi, v))
-            ados_sa  = st.number_input("Social Affect (SA) raw score", 0, 28, _ados_int("SA", 20, 0, 28), key="ados_sa")
-            ados_rrb = st.number_input("Restricted & Repetitive Behavior (RRB) raw score", 0, 10, _ados_int("RRB", 8, 0, 10), key="ados_rrb")
-            ados_combined = ados_sa + ados_rrb
-            st.metric("Algorithm Combined Total (SA + RRB)", ados_combined)
-            ados_comparison = st.number_input("Comparison Score (1-10)", 1, 10, _ados_int("Comparison Score", 10, 1, 10), key="ados_comparison")
+    with col2:
+        # Auto-classify
+        auto_sa_label   = ados_sa_label(ados_module, ados_sa)
+        auto_rrb_label  = ados_rrb_label(ados_rrb)
+        auto_class      = ados_classify(ados_module, ados_sa, ados_rrb)
+        auto_cs_label   = comparison_score_label(ados_comparison)
 
-        with col2:
-            # Auto-classify
-            auto_sa_label   = ados_sa_label(ados_module, ados_sa)
-            auto_rrb_label  = ados_rrb_label(ados_rrb)
-            auto_class      = ados_classify(ados_module, ados_sa, ados_rrb)
-            auto_cs_label   = comparison_score_label(ados_comparison)
+        st.markdown("**Auto-Classification**")
+        st.write(f"SA ({ados_sa}): **{auto_sa_label}**")
+        st.write(f"RRB ({ados_rrb}): **{auto_rrb_label}**")
+        st.write(f"Combined ({ados_combined}): **{auto_cs_label}**")
+        if auto_class == "Autism":
+            st.error(f"ADOS-2 Classification: **{auto_class}**")
+        elif auto_class == "Autism Spectrum":
+            st.warning(f"ADOS-2 Classification: **{auto_class}**")
+        else:
+            st.success(f"ADOS-2 Classification: **{auto_class}**")
 
-            st.markdown("**Auto-Classification**")
-            st.write(f"SA ({ados_sa}): **{auto_sa_label}**")
-            st.write(f"RRB ({ados_rrb}): **{auto_rrb_label}**")
-            st.write(f"Combined ({ados_combined}): **{auto_cs_label}**")
-            if auto_class == "Autism":
-                st.error(f"ADOS-2 Classification: **{auto_class}**")
-            elif auto_class == "Autism Spectrum":
-                st.warning(f"ADOS-2 Classification: **{auto_class}**")
-            else:
-                st.success(f"ADOS-2 Classification: **{auto_class}**")
+    st.markdown("---")
+    st.markdown("#### DSM-5 Criteria Evaluation")
 
-        st.markdown("---")
-        st.markdown("#### DSM-5 Criteria Evaluation")
+    col1, col2 = st.columns(2)
+    with col1:
+        dsm5_a_met = st.checkbox("Criterion A: Symptoms present in early developmental period", value=True)
+        if dsm5_a_met:
+            dsm5_a_age = st.number_input("Age symptoms first noted (years)", 0, 18, 2)
+        else:
+            dsm5_a_age = None
+        dsm5_b_desc = st.text_area("Criterion B: Clinically significant impairment description",
+            value="Global impact across all areas.",
+            height=70)
+    with col2:
+        dsm5_c_desc = st.text_area("Criterion C: Not better explained by ID alone",
+            value="There is evidence of an intellectual disability and global developmental delay. Cognitive ability is impacted by receptive and expressive speech processing.",
+            height=70)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            dsm5_a_met = st.checkbox("Criterion A: Symptoms present in early developmental period", value=True)
-            if dsm5_a_met:
-                dsm5_a_age = st.number_input("Age symptoms first noted (years)", 0, 18, 2)
-            else:
-                dsm5_a_age = None
-            dsm5_b_desc = st.text_area("Criterion B: Clinically significant impairment description",
-                value="Global impact across all areas.",
-                height=70)
-        with col2:
-            dsm5_c_desc = st.text_area("Criterion C: Not better explained by ID alone",
-                value="There is evidence of an intellectual disability and global developmental delay. Cognitive ability is impacted by receptive and expressive speech processing.",
-                height=70)
+    st.markdown("#### Specifiers")
+    col1, col2 = st.columns(2)
+    with col1:
+        intellectual_impairment = st.checkbox("Intellectual Impairment present", value=True)
+        language_impairment     = st.text_input("Language Impairment type",
+            placeholder="e.g. Area of Receptive-Expressive Language Processing")
+    with col2:
+        criteria_a_level = st.selectbox("Criteria A Severity (Social Communication)", [1,2,3], index=2,
+            format_func=lambda x: f"Level {x} - {'Requiring Support' if x==1 else 'Requiring Substantial Support' if x==2 else 'Requiring Very Substantial Support'}")
+        criteria_b_level = st.selectbox("Criteria B Severity (RRB)", [1,2,3], index=0,
+            format_func=lambda x: f"Level {x} - {'Requiring Support' if x==1 else 'Requiring Substantial Support' if x==2 else 'Requiring Very Substantial Support'}")
 
-        st.markdown("#### Specifiers")
-        col1, col2 = st.columns(2)
-        with col1:
-            intellectual_impairment = st.checkbox("Intellectual Impairment present", value=True)
-            language_impairment     = st.text_input("Language Impairment type",
-                placeholder="e.g. Area of Receptive-Expressive Language Processing")
-        with col2:
-            criteria_a_level = st.selectbox("Criteria A Severity (Social Communication)", [1,2,3], index=2,
-                format_func=lambda x: f"Level {x} - {'Requiring Support' if x==1 else 'Requiring Substantial Support' if x==2 else 'Requiring Very Substantial Support'}")
-            criteria_b_level = st.selectbox("Criteria B Severity (RRB)", [1,2,3], index=0,
-                format_func=lambda x: f"Level {x} - {'Requiring Support' if x==1 else 'Requiring Substantial Support' if x==2 else 'Requiring Very Substantial Support'}")
-
-        ados_data = {
-            "module": ados_module, "module_reason": ados_module_reason,
-            "sa": ados_sa, "rrb": ados_rrb, "combined": ados_combined,
-            "comparison": ados_comparison, "classification": auto_class,
-            "dsm5_a_met": dsm5_a_met, "dsm5_a_age": dsm5_a_age,
-            "dsm5_b_desc": dsm5_b_desc, "dsm5_c_desc": dsm5_c_desc,
-            "intellectual_impairment": intellectual_impairment,
-            "language_impairment": language_impairment,
-            "criteria_a_level": criteria_a_level, "criteria_b_level": criteria_b_level,
-        }
+    ados_data = {
+        "module": ados_module, "module_reason": ados_module_reason,
+        "sa": ados_sa, "rrb": ados_rrb, "combined": ados_combined,
+        "comparison": ados_comparison, "classification": auto_class,
+        "dsm5_a_met": dsm5_a_met, "dsm5_a_age": dsm5_a_age,
+        "dsm5_b_desc": dsm5_b_desc, "dsm5_c_desc": dsm5_c_desc,
+        "intellectual_impairment": intellectual_impairment,
+        "language_impairment": language_impairment,
+        "criteria_a_level": criteria_a_level, "criteria_b_level": criteria_b_level,
+    }
 
     st.divider()
 
@@ -1736,66 +1821,65 @@ if use_ctoni:
         elif scaled <= 12: return "Average"
         else: return "Above Average"
 
-    ctoni_upload_tab, ctoni_manual_tab = st.tabs(["Upload Score Sheet", "Manual Entry"])
+    _ctoni_has_data = bool(st.session_state.get("ctoni_fsiq_ss") or st.session_state.get("ctoni_pic_ss"))
 
-    with ctoni_upload_tab:
+    with st.expander("📷  Upload Score Sheet", expanded=not bool(_ctoni_has_data)):
         st.info("Manual entry below.")
 
-    with ctoni_manual_tab:
-        st.caption("Composite scores (Standard Score: mean=100, SD=15)")
-        ctoni_col1, ctoni_col2 = st.columns(2)
-        with ctoni_col1:
-            ctoni_pictorial_ss = st.number_input("Pictorial Scale Standard Score", 40, 160, 86, key="ctoni_pic_ss")
-            ctoni_pictorial_pct = st.number_input("Pictorial Scale Percentile", 0, 99, 18, key="ctoni_pic_pct")
-            pic_class = _ctoni_classification(ctoni_pictorial_ss)
-            st.caption(f"Classification: {pic_class}")
+    st.caption("Composite scores (Standard Score: mean=100, SD=15)")
+    ctoni_col1, ctoni_col2 = st.columns(2)
+    with ctoni_col1:
+        ctoni_pictorial_ss = st.number_input("Pictorial Scale Standard Score", 40, 160, 86, key="ctoni_pic_ss")
+        ctoni_pictorial_pct = st.number_input("Pictorial Scale Percentile", 0, 99, 18, key="ctoni_pic_pct")
+        pic_class = _ctoni_classification(ctoni_pictorial_ss)
+        st.caption(f"Classification: {pic_class}")
 
-            ctoni_geometric_ss = st.number_input("Geometric Scale Standard Score", 40, 160, 91, key="ctoni_geo_ss")
-            ctoni_geometric_pct = st.number_input("Geometric Scale Percentile", 0, 99, 21, key="ctoni_geo_pct")
-            geo_class = _ctoni_classification(ctoni_geometric_ss)
-            st.caption(f"Classification: {geo_class}")
+        ctoni_geometric_ss = st.number_input("Geometric Scale Standard Score", 40, 160, 91, key="ctoni_geo_ss")
+        ctoni_geometric_pct = st.number_input("Geometric Scale Percentile", 0, 99, 21, key="ctoni_geo_pct")
+        geo_class = _ctoni_classification(ctoni_geometric_ss)
+        st.caption(f"Classification: {geo_class}")
 
-        with ctoni_col2:
-            ctoni_fsiq_ss = st.number_input("Full Scale IQ Standard Score", 40, 160, 87, key="ctoni_fsiq_ss")
-            ctoni_fsiq_pct = st.number_input("Full Scale IQ Percentile", 0, 99, 19, key="ctoni_fsiq_pct")
-            fsiq_class = _ctoni_classification(ctoni_fsiq_ss)
-            st.caption(f"Classification: {fsiq_class}")
+    with ctoni_col2:
+        ctoni_fsiq_ss = st.number_input("Full Scale IQ Standard Score", 40, 160, 87, key="ctoni_fsiq_ss")
+        ctoni_fsiq_pct = st.number_input("Full Scale IQ Percentile", 0, 99, 19, key="ctoni_fsiq_pct")
+        fsiq_class = _ctoni_classification(ctoni_fsiq_ss)
+        st.caption(f"Classification: {fsiq_class}")
 
-        st.caption("Subtest scaled scores (1-19) and percentiles")
-        ctoni_sub_col1, ctoni_sub_col2 = st.columns(2)
-        ctoni_subtests_def = [
-            ("Pictorial Analogies","pictorial_analogies"),
-            ("Pictorial Categories","pictorial_categories"),
-            ("Pictorial Sequences","pictorial_sequences"),
-            ("Geometric Analogies","geometric_analogies"),
-            ("Geometric Categories","geometric_categories"),
-            ("Geometric Sequences","geometric_sequences"),
-        ]
-        ctoni_subtest_scores = {}
-        for idx, (name, key) in enumerate(ctoni_subtests_def):
-            col_target = ctoni_sub_col1 if idx % 2 == 0 else ctoni_sub_col2
-            with col_target:
-                ss_val = st.number_input(f"{name} Scaled Score", 1, 19, 9, key=f"ctoni_{key}_ss")
-                pct_val = st.number_input(f"{name} Percentile", 0, 99, 25, key=f"ctoni_{key}_pct")
-                ctoni_subtest_scores[key] = {"ss": ss_val, "pct": pct_val}
+    st.caption("Subtest scaled scores (1-19) and percentiles")
+    ctoni_sub_col1, ctoni_sub_col2 = st.columns(2)
+    ctoni_subtests_def = [
+        ("Pictorial Analogies","pictorial_analogies"),
+        ("Pictorial Categories","pictorial_categories"),
+        ("Pictorial Sequences","pictorial_sequences"),
+        ("Geometric Analogies","geometric_analogies"),
+        ("Geometric Categories","geometric_categories"),
+        ("Geometric Sequences","geometric_sequences"),
+    ]
+    ctoni_subtest_scores = {}
+    for idx, (name, key) in enumerate(ctoni_subtests_def):
+        col_target = ctoni_sub_col1 if idx % 2 == 0 else ctoni_sub_col2
+        with col_target:
+            ss_val = st.number_input(f"{name} Scaled Score", 1, 19, 9, key=f"ctoni_{key}_ss")
+            pct_val = st.number_input(f"{name} Percentile", 0, 99, 25, key=f"ctoni_{key}_pct")
+            ctoni_subtest_scores[key] = {"ss": ss_val, "pct": pct_val}
 
-        ctoni_data = {
-            "pictorial_ss": ctoni_pictorial_ss, "pictorial_pct": ctoni_pictorial_pct,
-            "geometric_ss": ctoni_geometric_ss, "geometric_pct": ctoni_geometric_pct,
-            "fsiq_ss": ctoni_fsiq_ss, "fsiq_pct": ctoni_fsiq_pct,
-            "pictorial_analogies_ss": ctoni_subtest_scores["pictorial_analogies"]["ss"],
-            "pictorial_analogies_pct": ctoni_subtest_scores["pictorial_analogies"]["pct"],
-            "pictorial_categories_ss": ctoni_subtest_scores["pictorial_categories"]["ss"],
-            "pictorial_categories_pct": ctoni_subtest_scores["pictorial_categories"]["pct"],
-            "pictorial_sequences_ss": ctoni_subtest_scores["pictorial_sequences"]["ss"],
-            "pictorial_sequences_pct": ctoni_subtest_scores["pictorial_sequences"]["pct"],
-            "geometric_analogies_ss": ctoni_subtest_scores["geometric_analogies"]["ss"],
-            "geometric_analogies_pct": ctoni_subtest_scores["geometric_analogies"]["pct"],
-            "geometric_categories_ss": ctoni_subtest_scores["geometric_categories"]["ss"],
-            "geometric_categories_pct": ctoni_subtest_scores["geometric_categories"]["pct"],
-            "geometric_sequences_ss": ctoni_subtest_scores["geometric_sequences"]["ss"],
-            "geometric_sequences_pct": ctoni_subtest_scores["geometric_sequences"]["pct"],
-        }
+    ctoni_data = {
+        "pictorial_ss": ctoni_pictorial_ss, "pictorial_pct": ctoni_pictorial_pct,
+        "geometric_ss": ctoni_geometric_ss, "geometric_pct": ctoni_geometric_pct,
+        "fsiq_ss": ctoni_fsiq_ss, "fsiq_pct": ctoni_fsiq_pct,
+        "pictorial_analogies_ss": ctoni_subtest_scores["pictorial_analogies"]["ss"],
+        "pictorial_analogies_pct": ctoni_subtest_scores["pictorial_analogies"]["pct"],
+        "pictorial_categories_ss": ctoni_subtest_scores["pictorial_categories"]["ss"],
+        "pictorial_categories_pct": ctoni_subtest_scores["pictorial_categories"]["pct"],
+        "pictorial_sequences_ss": ctoni_subtest_scores["pictorial_sequences"]["ss"],
+        "pictorial_sequences_pct": ctoni_subtest_scores["pictorial_sequences"]["pct"],
+        "geometric_analogies_ss": ctoni_subtest_scores["geometric_analogies"]["ss"],
+        "geometric_analogies_pct": ctoni_subtest_scores["geometric_analogies"]["pct"],
+        "geometric_categories_ss": ctoni_subtest_scores["geometric_categories"]["ss"],
+        "geometric_categories_pct": ctoni_subtest_scores["geometric_categories"]["pct"],
+        "geometric_sequences_ss": ctoni_subtest_scores["geometric_sequences"]["ss"],
+        "geometric_sequences_pct": ctoni_subtest_scores["geometric_sequences"]["pct"],
+    }
 
     st.divider()
 
@@ -1903,6 +1987,7 @@ def build_eval_materials_list():
     tests = []
     if use_wppsi:   tests.append("Cognitive Scores from WPPSI-IV (Composite Subtests)")
     if use_wisc:    tests.append("Cognitive Scores from WISC-V (Composite Subtests)")
+    if use_wais:    tests.append("Cognitive Scores from WAIS-V (Composite Subtests)")
     if use_ados:    tests.append(f"Autism Diagnostic Observation Schedule, Second Edition - {ados_data.get('module','Module 1')} (ADOS-2)")
     if use_basc:    tests.append(f"Behavior Assessment System for Children - 3rd Edition ({basc_data.get('form','PRS-P')})")
     if use_vineland:tests.append("Vineland Adaptive Behavior Scales - Parent")
@@ -1967,8 +2052,8 @@ def build_prompt():
     tests_list = "\n".join(f"• {t}" for t in build_eval_materials_list())
 
     cog_section = ""
-    if use_wppsi or use_wisc:
-        cog_label = "WPPSI-IV" if use_wppsi else "WISC-V"
+    if use_wppsi or use_wisc or use_wais:
+        cog_label = "WPPSI-IV" if use_wppsi else ("WISC-V" if use_wisc else "WAIS-V")
         if not cog_scores.get("obtained", True):
             cog_section = f"""
 {cog_label}:
@@ -2076,8 +2161,8 @@ def assemble_full_report(llm_output):
     recs = build_recs_list()
     recs_text = "\n".join(f"     {i+1}. {r}" for i,r in enumerate(recs))
 
-    cog_label = "WPPSI-IV" if use_wppsi else ("WISC-V" if use_wisc else "Cognitive Assessment")
-    if use_wppsi or use_wisc:
+    cog_label = "WPPSI-IV" if use_wppsi else ("WISC-V" if use_wisc else ("WAIS-V" if use_wais else "Cognitive Assessment"))
+    if use_wppsi or use_wisc or use_wais:
         if not cog_scores.get("obtained", True):
             cog_text = f"""Wechsler Preschool Primary Scale of Intelligence - Fourth Edition ({cog_label})
 
@@ -2172,7 +2257,7 @@ Psychology Intern                     {supervisor_name or '[Supervisor Name]'}
                                       contact@rimonhealth.com
                                       347-746-6613
 """
-    return report
+    return strip_emdashes(report)
 
 
 # ── GENERATE BUTTON ────────────────────────────────────────────────────────────
@@ -3160,11 +3245,13 @@ def make_docx(llm_output):
     _add_section_heading(doc, "Assessments:")
 
     # ── WPPSI / WISC ──────────────────────────────────────────────────
-    if use_wppsi or use_wisc:
-        cog_label    = "WPPSI-IV" if use_wppsi else "WISC-V"
+    if use_wppsi or use_wisc or use_wais:
+        cog_label    = "WPPSI-IV" if use_wppsi else ("WISC-V" if use_wisc else "WAIS-V")
         cog_fullname = ("Wechsler Preschool Primary Scale of Intelligence - Fourth Edition (WPPSI-IV)"
                         if use_wppsi else
-                        "Wechsler Intelligence Scale for Children - Fifth Edition (WISC-V)")
+                        "Wechsler Intelligence Scale for Children - Fifth Edition (WISC-V)"
+                        if use_wisc else
+                        "Wechsler Adult Intelligence Scale - Fifth Edition (WAIS-V)")
         _add_subheading(doc, cog_fullname)
         if not cog_scores.get("obtained", True):
             _add_body(doc, f"No composite score was obtained on the {cog_label}. "
@@ -3322,6 +3409,60 @@ def make_docx(llm_output):
                         "Speed (PSI), and Full Scale IQ (FSIQ), along with ancillary indices such as the Nonverbal "
                         "Index (NVI) and General Ability Index (GAI)."
                     )
+                    low_para = (
+                        f"Extremely low {battery} scores (<70) represent significant cognitive delays relative to "
+                        "same-age peers and may suggest the presence of an intellectual disability or substantial "
+                        "neurodevelopmental impairment. Children with scores in the extremely low range typically "
+                        "show some or all of the following: Marked difficulty learning age-appropriate academic skills "
+                        "(reading, writing, math). Severe limitations in problem-solving, memory retention, and abstract "
+                        "thinking. Need for specialized instruction or individualized educational plans (IEPs) in a "
+                        "structured setting. Possible comorbidities: attention deficits, language delays, or "
+                        "visual/spatial processing disorders."
+                    )
+                    context_para = (
+                        f"Interpreting extremely low {battery} scores requires careful consideration of contextual "
+                        "and environmental factors. These include: Testing conditions: fatigue, anxiety, distractibility, "
+                        "language comprehension, and motivation can significantly impact scores. Language or communication "
+                        "barriers: non-native language speakers or children with expressive/receptive language delays may "
+                        "score artificially low. Medical or developmental history: preterm birth, history of brain injury, "
+                        "or chronic health conditions can affect cognitive development. "
+                        f"{battery} results should not be interpreted in isolation. Scores may be influenced by motivation, "
+                        "test-taking behavior, or fatigue. Specialist consultation is essential to differentiate true "
+                        "cognitive deficits from environmental or situational factors."
+                    )
+                elif battery == "WAIS-V":
+                    intro_para = (
+                        "The WAIS-V (Wechsler Adult Intelligence Scale, Fifth Edition) is a standardized tool "
+                        "designed to measure cognitive abilities in adults ages 16.0 through 90.11 years old. "
+                        "It provides multiple scores including Verbal Comprehension (VCI), Visual Spatial (VSI), "
+                        "Fluid Reasoning (FRI), Working Memory (WMI), Processing Speed (PSI), and Full Scale IQ "
+                        "(FSIQ), along with ancillary indices such as the Nonverbal Index (NVI) and General Ability "
+                        "Index (GAI)."
+                    )
+                    low_para = (
+                        f"Extremely low {battery} scores (<70) represent significant cognitive delays relative to "
+                        "same-age peers and may suggest the presence of an intellectual disability or substantial "
+                        "neurodevelopmental impairment. Adults with scores in the extremely low range typically "
+                        "show some or all of the following: Marked difficulty learning age-appropriate skills "
+                        "(vocational, daily living skills, reading, writing, and math). Severe limitations in "
+                        "problem-solving, memory retention, and abstract thinking. Need for specialized instruction "
+                        "or individualized educational plans (IEPs) in a structured setting. Possible comorbidities: "
+                        "attention deficits, language delays, or visual/spatial processing disorders."
+                    )
+                    context_para = (
+                        f"Interpreting extremely low {battery} scores requires careful consideration of contextual "
+                        "and environmental factors. These include: Testing conditions: fatigue, anxiety, distractibility, "
+                        "language comprehension, and motivation can significantly impact scores. Language or communication "
+                        "barriers: non-native language speakers or adults with expressive/receptive language delays may "
+                        "score artificially low (Index scores like VCI or WMI are particularly sensitive). Medical or "
+                        "developmental history: preterm birth, history of brain injury, or chronic health conditions can "
+                        "affect cognitive development. Differentiating specific learning disabilities vs. global cognitive "
+                        "delays: subtests may reveal relative strengths and weaknesses, helping to distinguish between "
+                        "targeted learning challenges and generalized intellectual impairment. "
+                        f"{battery} results should not be interpreted in isolation. Scores may be influenced by motivation, "
+                        "test-taking behavior, or fatigue. Specialist consultation is essential to differentiate true "
+                        "cognitive deficits from environmental or situational factors."
+                    )
                 else:
                     intro_para = (
                         "The WISC-V (Wechsler Intelligence Scale for Children, Fifth Edition) is a standardized "
@@ -3330,6 +3471,27 @@ def make_docx(llm_output):
                         "Fluid Reasoning (FRI), Working Memory (WMI), Processing Speed (PSI), and Full Scale IQ "
                         "(FSIQ), along with ancillary indices such as the Nonverbal Index (NVI) and General Ability "
                         "Index (GAI)."
+                    )
+                    low_para = (
+                        f"Extremely low {battery} scores (<70) represent significant cognitive delays relative to "
+                        "same-age peers and may suggest the presence of an intellectual disability or substantial "
+                        "neurodevelopmental impairment. Children with scores in the extremely low range typically "
+                        "show some or all of the following: Marked difficulty learning age-appropriate academic skills "
+                        "(reading, writing, math). Severe limitations in problem-solving, memory retention, and abstract "
+                        "thinking. Need for specialized instruction or individualized educational plans (IEPs) in a "
+                        "structured setting. Possible comorbidities: attention deficits, language delays, or "
+                        "visual/spatial processing disorders."
+                    )
+                    context_para = (
+                        f"Interpreting extremely low {battery} scores requires careful consideration of contextual "
+                        "and environmental factors. These include: Testing conditions: fatigue, anxiety, distractibility, "
+                        "language comprehension, and motivation can significantly impact scores. Language or communication "
+                        "barriers: non-native language speakers or children with expressive/receptive language delays may "
+                        "score artificially low. Medical or developmental history: preterm birth, history of brain injury, "
+                        "or chronic health conditions can affect cognitive development. "
+                        f"{battery} results should not be interpreted in isolation. Scores may be influenced by motivation, "
+                        "test-taking behavior, or fatigue. Specialist consultation is essential to differentiate true "
+                        "cognitive deficits from environmental or situational factors."
                     )
                 _add_body(doc, intro_para)
 
@@ -3340,26 +3502,17 @@ def make_docx(llm_output):
                     "High Average: 110-119 (75th-89th percentile); Superior: 120-129 (90th-95th percentile); "
                     "Very Superior: 130+ (96th-99th percentile).")
 
-                _add_body(doc,
-                    f"Extremely low {battery} scores (<70) represent significant cognitive delays relative to "
-                    "same-age peers and may suggest the presence of an intellectual disability or substantial "
-                    "neurodevelopmental impairment. Children with scores in the extremely low range typically "
-                    "show some or all of the following: Marked difficulty learning age-appropriate academic skills "
-                    "(reading, writing, math). Severe limitations in problem-solving, memory retention, and abstract "
-                    "thinking. Need for specialized instruction or individualized educational plans (IEPs) in a "
-                    "structured setting. Possible comorbidities: attention deficits, language delays, or "
-                    "visual/spatial processing disorders.")
+                _add_body(doc, low_para)
 
-                _add_body(doc,
-                    f"Interpreting extremely low {battery} scores requires careful consideration of contextual "
-                    "and environmental factors. These include: Testing conditions: fatigue, anxiety, distractibility, "
-                    "language comprehension, and motivation can significantly impact scores. Language or communication "
-                    "barriers: non-native language speakers or children with expressive/receptive language delays may "
-                    "score artificially low. Medical or developmental history: preterm birth, history of brain injury, "
-                    "or chronic health conditions can affect cognitive development. "
-                    f"{battery} results should not be interpreted in isolation. Scores may be influenced by motivation, "
-                    "test-taking behavior, or fatigue. Specialist consultation is essential to differentiate true "
-                    "cognitive deficits from environmental or situational factors.")
+                _add_body(doc, context_para)
+
+                if battery == "WAIS-V":
+                    _add_body(doc,
+                        "Extremely low WAIS-V scores indicate serious cognitive challenges compared to same-age "
+                        "peers and typically warrant comprehensive intervention, individualized vocational and "
+                        "educational planning, and possibly additional diagnostic evaluation. However, interpretation "
+                        "must consider context, subtest patterns, and developmental history to accurately understand "
+                        "the adult's abilities and needs.")
             else:
                 _wppsi_wisc_table(doc, cog_label)
 
