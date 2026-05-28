@@ -253,6 +253,22 @@ if not st.session_state.get("patient_selected"):
                     st.rerun()
         st.divider()
         if st.button("Start a New Patient", type="primary", key="_new_patient_btn"):
+            # Clear all battery data and checkboxes so new form starts completely blank
+            _clear_keys = [
+                # extracted scores
+                "extracted_cog_scores","extracted_basc_scores","extracted_vin_scores",
+                "extracted_ados_scores","extracted_ctoni_scores","extracted_ptoni_scores",
+                # manual bypass flags
+                "cog_manual_mode","basc_manual_mode","vineland_manual_mode",
+                "ados_manual_mode","ctoni_manual_mode","ptoni_manual_mode",
+                # checkboxes (so they default to unchecked)
+                "use_wppsi","use_wisc","use_wais","use_ados",
+                "use_vineland","use_ctoni","use_ptoni","use_basc",
+                # uploads and recordings
+                "bulk_extracted","recording_segments","patient_name_input",
+            ]
+            for _ck in _clear_keys:
+                st.session_state.pop(_ck, None)
             st.session_state["patient_selected"] = True
             st.session_state["autosave_loaded"] = True
             st.rerun()
@@ -1538,7 +1554,12 @@ if _bulk_cache:
             st.success(f"**{entry['fname']}** — {n} scores loaded", icon="✅")
     if st.button("Clear uploads and start fresh", key="bulk_clear"):
         st.session_state["bulk_extracted"] = {}
-        for k in ["extracted_cog_scores","extracted_basc_scores","extracted_vin_scores","extracted_ados_scores","extracted_ctoni_scores","extracted_ptoni_scores"]:
+        for k in [
+            "extracted_cog_scores","extracted_basc_scores","extracted_vin_scores",
+            "extracted_ados_scores","extracted_ctoni_scores","extracted_ptoni_scores",
+            "cog_manual_mode","basc_manual_mode","vineland_manual_mode",
+            "ados_manual_mode","ctoni_manual_mode","ptoni_manual_mode",
+        ]:
             st.session_state.pop(k, None)
         st.rerun()
 
