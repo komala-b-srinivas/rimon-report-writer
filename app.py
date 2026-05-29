@@ -1285,7 +1285,8 @@ with st.container():
 
     # Parent interview
     with st.expander("Parent Interview", expanded=True):
-        interview_date = st.text_input("Interview date", value=eval_date.strftime("%m/%d/%Y"))
+        interview_date_val = st.date_input("Interview date", value=eval_date, key="interview_date_input")
+        interview_date = interview_date_val.strftime("%m/%d/%Y")
         col1, col2 = st.columns(2)
         with col1:
             family_composition = st.text_input("Family composition",
