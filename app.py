@@ -170,8 +170,16 @@ _SAVE_DIR = pathlib.Path(__file__).parent
 
 _SKIP_KEYS = {
     "authenticated", "autosave_loaded", "_pending_restore", "patient_selected",
-    # file uploader + audio widgets — Streamlit forbids pre-setting these via session_state
+    # file uploader + audio widgets - Streamlit forbids pre-setting these via session_state
     "bg_mic", "bg_upload", "obs_mic_input", "obs_upload", "bulk_score_upload",
+    # buttons - ephemeral, cannot be pre-set from session_state
+    "_new_patient_btn", "_restore_btn", "_discard_btn",
+    "basc_manual_btn", "vineland_manual_btn", "ados_manual_btn",
+    "cog_manual_btn", "ctoni_manual_btn", "ptoni_manual_btn",
+    "bg_extract_btn", "bg_mic_btn", "bg_mic_clinical_btn",
+    "bg_upload_btn", "bg_upload_clinical_btn",
+    "obs_extract_btn", "obs_mic_btn",
+    "bulk_clear", "seg_clear_all",
 }
 
 def _safe_username():
